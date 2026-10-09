@@ -1,0 +1,35 @@
+# ═══ ایجنت کامپیوتری تمام‌عیار (با Ollama لوکال) ═══
+
+[intelligence]
+default_model = "ollama/qwen2.5:7b"
+preferred_engine = "ollama"
+temperature = 0.5
+max_tokens = 2000
+
+[agent]
+default_agent = "computer"
+max_turns = 15
+tools = "*"
+context_from_memory = true
+persona = "khorshid"
+language = "fa"
+
+[engine]
+default = "ollama"
+
+[engine.ollama]
+host = "http://localhost:11434"
+model = "qwen2.5:7b"
+
+[tools]
+confirm_dangerous = true
+workspace = "~/ultimate-jarvis-workspace"
+
+[tools.storage]
+default_backend = "sqlite"
+db_path = "~/.ultimate-jarvis/memory.db"
+
+[server]
+host = "127.0.0.1"
+port = 8899
+agent = "computer"

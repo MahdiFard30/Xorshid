@@ -1,0 +1,18 @@
+# ═══ گپ سبک بدون ابزار ═══
+
+[intelligence]
+default_model = "mock/smart"
+preferred_engine = "mock"
+temperature = 0.8
+max_tokens = 800
+
+[agent]
+default_agent = "simple"
+max_turns = 1
+tools = ""
+context_from_memory = false
+persona = "khorshid"
+language = "fa"
+
+[engine]
+default = "mock"

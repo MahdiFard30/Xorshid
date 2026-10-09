@@ -1,0 +1,15 @@
+{
+  "python.terminal.activateEnvironment": false,
+  "python-envs.terminal.autoActivationType": "off",
+  "python.defaultInterpreterPath": "/home/mahdi/Downloads/Xorshid/.venv/bin/python",
+  "terminal.integrated.profiles.linux": {
+    "Khorshid": {
+      "path": "/bin/bash",
+      "args": [
+        "--rcfile",
+        "/home/mahdi/Downloads/Xorshid/.vscode/khorshid.bashrc"
+      ]
+    }
+  },
+  "terminal.integrated.defaultProfile.linux": "Khorshid"
+}

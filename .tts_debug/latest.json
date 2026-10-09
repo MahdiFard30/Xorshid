@@ -1,0 +1,110 @@
+{
+  "text": "قربان، یوتیوب رو باز کردم و نتایج جستجوی سریال «پای تخت» (The Crown) رو آوردم. راستی، فصل ۶ آخرین فصل این سریال بود و هنوز فصل ۷ رسمی‌ای منتشر نشده، به خاطر همین ویدیوهای نتایج بیشتر شامل تیلسرها، میکس‌ها یا بخش‌های مرتبط هستن. الان صفحه نتایج جلوی روست، می‌خوای روی کدوم ویدیو کلیک کنم؟ --- ⚙️ 12 ابزار اجرا شد (9 موفق) ایجنت: computer مدل: gemini/gemini-3.5-flash-lite",
+  "device": "cuda",
+  "chunks": [
+    {
+      "source": "قربان، یوتیوب رو باز کردم و نتایج جستجوی سریال پای تخت رو آوردم.",
+      "phonemes": "qorbAn yutyub ro bAz kardam va natAyeje jostojuye",
+      "tokens": 14,
+      "attempts": [
+        {
+          "seconds": 2.96,
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "source": "قربان، یوتیوب رو باز کردم و نتایج جستجوی سریال پای تخت رو آوردم.",
+      "phonemes": "seriyAle pAye taxt ro ?Avardam",
+      "tokens": 10,
+      "attempts": [
+        {
+          "seconds": 1.84,
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "source": "راستی، فصل شش آخرین فصل این سریال بود و هنوز فصل هفت رسمی‌ای منتشر نشده، به خاطر همین ویدیوهای نتایج بیشتر شامل تیلسرها،",
+      "phonemes": "rAsti fasle SoS ?Axarin fasle ?in seriyAl bud va hanuz",
+      "tokens": 17,
+      "attempts": [
+        {
+          "seconds": 4.48,
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "source": "راستی، فصل شش آخرین فصل این سریال بود و هنوز فصل هفت رسمی‌ای منتشر نشده، به خاطر همین ویدیوهای نتایج بیشتر شامل تیلسرها،",
+      "phonemes": "fasle haft rasmi?i montaSer naSode be xAtere hamin vidiyohAye natAyeje biStar",
+      "tokens": 17,
+      "attempts": [
+        {
+          "seconds": 4.8,
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "source": "راستی، فصل شش آخرین فصل این سریال بود و هنوز فصل هفت رسمی‌ای منتشر نشده، به خاطر همین ویدیوهای نتایج بیشتر شامل تیلسرها،",
+      "phonemes": "SAmele tilserhA",
+      "tokens": 6,
+      "attempts": [
+        {
+          "seconds": 1.68,
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "source": "میکس‌ها یا بخش‌های مرتبط هستن.",
+      "phonemes": "mikshA yA baxSAye mortabet hastan",
+      "tokens": 10,
+      "attempts": [
+        {
+          "seconds": 2.32,
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "source": "الان صفحه نتایج جلوی روست، می‌خوای روی کدوم ویدیو کلیک کنم؟",
+      "phonemes": "?alAn safhe natAyeje jeloye rust mikhAy ruye kodum vidiyo kelik konam",
+      "tokens": 15,
+      "attempts": [
+        {
+          "seconds": 3.68,
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "source": "دوازده ابزار اجرا شد نه موفق ایجنت: مدل: سه ممیز پنج دهم",
+      "phonemes": "davAzdah ?abzAre ?ejrA Sod na movaffaq ?ijent model se",
+      "tokens": 15,
+      "attempts": [
+        {
+          "seconds": 3.68,
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "source": "دوازده ابزار اجرا شد نه موفق ایجنت: مدل: سه ممیز پنج دهم",
+      "phonemes": "momayyeze panj dahom",
+      "tokens": 6,
+      "attempts": [
+        {
+          "seconds": 1.04,
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "voice_used_seconds": 4.5,
+  "status": "ok",
+  "normalized_text": "قربان، یوتیوب رو باز کردم و نتایج جستجوی سریال پای تخت رو آوردم. راستی، فصل شش آخرین فصل این سریال بود و هنوز فصل هفت رسمی‌ای منتشر نشده، به خاطر همین ویدیوهای نتایج بیشتر شامل تیلسرها، میکس‌ها یا بخش‌های مرتبط هستن. الان صفحه نتایج جلوی روست، می‌خوای روی کدوم ویدیو کلیک کنم؟ دوازده ابزار اجرا شد نه موفق ایجنت: مدل: سه ممیز پنج دهم",
+  "first_chunk_seconds": 2.225484423001035,
+  "generation_seconds": 11.19899898299991
+}

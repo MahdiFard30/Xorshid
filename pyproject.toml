@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ultimate-khorshid"
+version = "2.0.0"
+description = "ULTIMATE KHORSHID — قدرتمندترین ایجنت کامپیوتری پایتونی، الهام‌گرفته از OpenJarvis استنفورد"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+keywords = ["ai-agent", "khorshid", "computer-use", "llm", "assistant", "persian"]
+authors = [{ name = "Ultimate Jarvis" }]
+dependencies = []
+
+[project.optional-dependencies]
+server = ["fastapi>=0.100", "uvicorn>=0.22"]
+desktop = ["pyautogui>=0.9", "mss>=9.0", "pillow>=10.0", "pyperclip>=1.8"]
+browser = ["playwright>=1.40"]
+voice = ["sounddevice>=0.4", "SpeechRecognition>=3.10"]
+hotkey = ["pynput>=1.7"]
+test = ["pytest>=7"]
+all = ["fastapi>=0.100", "uvicorn>=0.22",
+  "pyautogui>=0.9", "mss>=9.0", "pillow>=10.0", "pyperclip>=1.8",
+  "playwright>=1.40", "sounddevice>=0.4", "SpeechRecognition>=3.10", "pynput>=1.7", "pytest>=7"]
+
+[project.scripts]
+khorshid = "ultimate_khorshid.cli.main:main"
+ultimate-khorshid = "ultimate_khorshid.cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ultimate_khorshid"]

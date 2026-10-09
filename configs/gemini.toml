@@ -1,0 +1,39 @@
+# ═══ خورشید + مغز Gemini + صدا (نیاز به GEMINI_API_KEY) ═══
+# کلید رایگان: https://aistudio.google.com
+# export GEMINI_API_KEY="..."
+
+[intelligence]
+default_model = "gemini/gemini-2.0-flash"
+preferred_engine = "gemini"
+temperature = 0.7
+max_tokens = 2000
+
+[agent]
+default_agent = "computer"
+max_turns = 12
+tools = "*"
+context_from_memory = true
+persona = "khorshid"
+language = "fa"
+
+[engine]
+default = "gemini"
+
+[engine.gemini]
+model = "gemini-2.0-flash"
+tts_model = "gemini-2.5-flash-preview-tts"
+voice = "Kore"
+# api_key = "..."  # یا متغیر محیطی GEMINI_API_KEY
+
+[tools]
+confirm_dangerous = true
+workspace = "~/ultimate-jarvis-workspace"
+
+[tools.storage]
+default_backend = "sqlite"
+db_path = "~/.ultimate-jarvis/memory.db"
+
+[server]
+host = "127.0.0.1"
+port = 8899
+agent = "computer"

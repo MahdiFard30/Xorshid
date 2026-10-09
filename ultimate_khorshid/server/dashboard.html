@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🤖 خورشید نهایی — داشبورد</title>
+<style>
+:root{
+  --bg:#04070f; --card:rgba(148,197,255,.06); --card2:rgba(148,197,255,.1);
+  --line:rgba(125,211,252,.16); --txt:#e8f1ff; --mut:#8ea3c0;
+  --cy:#22d3ee; --bl:#3b82f6; --gr:#34d399; --rd:#f87171; --am:#fbbf24;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:radial-gradient(1200px 600px at 80% -10%,rgba(59,130,246,.18),transparent),
+radial-gradient(900px 500px at 10% 110%,rgba(34,211,238,.12),transparent),var(--bg);
+color:var(--txt);font-family:'Vazirmatn','IRANSans','Segoe UI',Tahoma,sans-serif;min-height:100vh}
+header{display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--line);
+background:rgba(4,10,20,.7);backdrop-filter:blur(8px);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+.reactor{width:52px;height:52px;border-radius:50%;position:relative;flex:none;
+background:radial-gradient(circle at 50% 50%,#a5f3fc 0 18%,#22d3ee 22%,#0e7490 45%,#082f49 70%);
+box-shadow:0 0 24px #22d3ee88,0 0 60px #22d3ee44;animation:pulse 3s ease-in-out infinite}
+.reactor::after{content:'';position:absolute;inset:6px;border-radius:50%;
+border:2px dashed rgba(255,255,255,.5);animation:spin 12s linear infinite}
+@keyframes pulse{50%{box-shadow:0 0 34px #22d3eecc,0 0 80px #22d3ee66}}
+@keyframes spin{to{transform:rotate(360deg)}}
+h1{font-size:20px;font-weight:800}
+h1 small{display:block;font-size:12px;color:var(--mut);font-weight:400}
+.pills{display:flex;gap:8px;margin-inline-start:auto;flex-wrap:wrap;align-items:center}
+.pill{font-size:12px;padding:5px 12px;border-radius:99px;background:var(--card2);
+border:1px solid var(--line);color:var(--cy);white-space:nowrap}
+.pill.g{background:rgba(52,211,153,.12);color:var(--gr);border-color:rgba(52,211,153,.3)}
+.clock{text-align:left;font-size:12px;color:var(--mut);line-height:1.7}
+main{display:grid;grid-template-columns:1fr 360px;gap:16px;padding:16px 22px;max-width:1560px;margin:auto}
+@media(max-width:1000px){main{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden}
+.chat{display:flex;flex-direction:column;height:calc(100vh - 130px);min-height:480px}
+#msgs{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:88%;padding:12px 16px;border-radius:16px;line-height:2;font-size:14.5px;word-break:break-word;position:relative}
+.msg.user{align-self:flex-start;background:linear-gradient(135deg,#1d4ed8,#0ea5e9);border-bottom-right-radius:4px;white-space:pre-wrap}
+.msg.bot{align-self:flex-end;background:var(--card2);border:1px solid var(--line);border-bottom-left-radius:4px;width:fit-content;max-width:94%}
+.msg.bot code{background:#0006;padding:1px 6px;border-radius:6px;color:var(--am);font-size:13px}
+.msg.bot pre{background:#0009;border:1px solid var(--line);border-radius:10px;padding:10px;overflow-x:auto;margin:8px 0;direction:ltr;text-align:left}
+.msg.bot pre code{background:none;padding:0}
+.msg.bot table{border-collapse:collapse;margin:8px 0;font-size:13px;width:100%}
+.msg.bot td,.msg.bot th{border:1px solid var(--line);padding:5px 10px}
+.msg.bot tr:first-child td{background:#0006;color:var(--cy);font-weight:700}
+.copy{position:absolute;top:6px;left:6px;background:#0008;border:1px solid var(--line);border-radius:8px;
+color:var(--mut);cursor:pointer;font-size:12px;padding:2px 8px}
+.copy:hover{color:var(--cy);border-color:var(--cy)}
+.trace{align-self:flex-end;width:94%;background:rgba(0,0,0,.3);border:1px dashed var(--line);
+border-radius:12px;padding:8px 12px;font-size:12.5px;color:var(--mut)}
+.trace b{color:var(--cy)}
+.trace details{margin-top:4px}
+.trace summary{cursor:pointer;color:var(--mut)}
+.trace pre{background:#0007;border-radius:8px;padding:8px;margin-top:6px;max-height:200px;overflow:auto;
+font-size:12px;white-space:pre-wrap}
+.typing{align-self:flex-end;background:var(--card2);border:1px solid var(--line);border-radius:16px;
+padding:10px 18px;font-size:20px;letter-spacing:4px;color:var(--cy)}
+.typing span{animation:blink 1.2s infinite}
+.typing span:nth-child(2){animation-delay:.2s}.typing span:nth-child(3){animation-delay:.4s}
+@keyframes blink{50%{opacity:.2}}
+.chips{display:flex;gap:8px;padding:0 16px 10px;flex-wrap:wrap}
+.chip{font-size:12.5px;padding:6px 14px;border-radius:99px;background:var(--card2);
+border:1px solid var(--line);color:var(--txt);cursor:pointer;transition:.2s;font-family:inherit}
+.chip:hover{border-color:var(--cy);color:var(--cy);box-shadow:0 0 12px #22d3ee44}
+.bar{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:rgba(0,0,0,.25)}
+.bar input{flex:1;background:#0006;border:1px solid var(--line);border-radius:12px;color:var(--txt);
+padding:12px 16px;font-size:15px;font-family:inherit;outline:none;min-width:0}
+.bar input:focus{border-color:var(--cy);box-shadow:0 0 0 3px #22d3ee22}
+.btn{border:1px solid var(--line);background:var(--card2);color:var(--txt);border-radius:12px;
+padding:0 14px;font-size:15px;cursor:pointer;transition:.2s;font-family:inherit;white-space:nowrap}
+.btn:hover{border-color:var(--cy);color:var(--cy)}
+.btn.go{background:linear-gradient(135deg,#1d4ed8,#0891b2);border:none;font-weight:700}
+.btn.go:hover{color:#fff;box-shadow:0 0 16px #22d3ee66}
+.btn.rec{background:#7f1d1d;border-color:var(--rd);color:#fff;animation:blink 1s infinite}
+.btn.off{opacity:.45}
+select{background:#0008;color:var(--txt);border:1px solid var(--line);border-radius:12px;
+padding:0 8px;font-family:inherit;font-size:13px;outline:none;max-width:130px}
+.side{display:flex;flex-direction:column;gap:14px;max-height:calc(100vh - 130px);overflow-y:auto;padding-bottom:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px 16px}
+.card h3{font-size:14px;margin-bottom:10px;color:var(--cy)}
+.card .row{display:flex;gap:8px;margin-bottom:8px}
+.card input,.card select{flex:1;background:#0006;border:1px solid var(--line);border-radius:10px;color:var(--txt);
+padding:8px 12px;font-size:13px;font-family:inherit;outline:none;min-width:0}
+.card label{font-size:12px;color:var(--mut);display:block;margin:6px 0 3px}
+.mini{font-size:12px;padding:7px 12px;border-radius:10px}
+.list{font-size:13px;line-height:2;max-height:220px;overflow-y:auto}
+.hitem{padding:5px 8px;border-radius:8px;cursor:pointer;font-size:12.5px;color:var(--mut);
+white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hitem:hover{background:var(--card2);color:var(--cy)}
+.todo{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed var(--line)}
+.todo.done span{text-decoration:line-through;opacity:.5}
+.todo button{margin-inline-start:auto}
+.kv{font-size:12.5px;color:var(--mut);line-height:2;white-space:pre-wrap}
+pre.out{background:#0008;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:12px;
+max-height:260px;overflow:auto;white-space:pre-wrap;line-height:1.9;margin-top:8px}
+#shot,#b-shot{width:100%;border-radius:12px;border:1px solid var(--line);background:#000}
+.hint{font-size:11.5px;color:var(--mut);margin-top:6px;line-height:1.9}
+details.card summary{cursor:pointer;font-size:14px;color:var(--cy);font-weight:700;list-style:none}
+details.card summary::-webkit-details-marker{display:none}
+details.card summary::before{content:'◀ ';font-size:11px}
+details.card[open] summary::before{content:'▼ ';font-size:11px}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:#1e3a5f;border-radius:8px}
+#toasts{position:fixed;bottom:20px;left:20px;display:flex;flex-direction:column;gap:8px;z-index:99}
+.toast{background:#0c1628;border:1px solid var(--cy);border-radius:12px;padding:10px 18px;
+font-size:13px;box-shadow:0 4px 20px #000a;animation:tin .3s;max-width:360px}
+@keyframes tin{from{transform:translateY(10px);opacity:0}}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+</style>
+</head>
+<body>
+<header>
+  <div class="reactor"></div>
+  <h1>خورشید نهایی <small>ULTIMATE KHORSHID — ایجنت کامپیوتری فارسی</small></h1>
+  <div class="pills">
+    <span class="pill g" id="p-engine">…</span>
+    <span class="pill" id="p-model">…</span>
+    <span class="pill" id="p-tools">…</span>
+    <span class="pill" id="p-hotkey" title="کلید احضار">⌨️ …</span>
+  </div>
+  <div class="clock"><div id="clock-fa">…</div><div id="clock-en">…</div></div>
+</header>
+<main>
+  <section class="panel chat">
+    <div id="msgs"></div>
+    <div class="chips" id="chips"></div>
+    <div class="bar">
+      <select id="agent" title="ایجنت"></select>
+      <input id="input" placeholder="به خورشید بگو چه کاری انجام بده... (Enter)" autocomplete="off">
+      <button class="btn" id="mic" title="گفتار (کروم)">🎤</button>
+      <button class="btn" id="spk" title="پخش صدای جواب">🔊</button>
+      <button class="btn" id="clr" title="پاک کردن چت">🗑</button>
+      <button class="btn go" id="send">ارسال ⚡</button>
+    </div>
+  </section>
+  <aside class="side">
+    <div class="card"><h3>⚙️ تنظیمات</h3>
+      <label>🎙️ پوش‌تو‌تاک (پیش‌فرض: ctrl را نگه دار، حرف بزن، ول کن!)</label>
+      <div class="row"><input id="set-hotkey" placeholder="ctrl" dir="ltr"><button class="btn mini" onclick="saveSettings()">💾</button></div>
+      <div class="hint" id="set-hk-desc"></div>
+      <div class="grid2">
+        <div><label>اکشن هات‌کی</label><select id="set-action"><option value="voice">🎙️ صوتی</option><option value="dashboard">🌐 داشبورد</option></select></div>
+        <div><label>موتور</label><select id="set-engine"><option value="">پیش‌فرض</option><option value="mock">mock آفلاین</option><option value="ollama">ollama</option><option value="openai_compat">openai</option><option value="gemini">gemini</option></select></div>
+      </div>
+      <label>مدل (مثل gemini/gemini-2.0-flash)</label>
+      <div class="row"><input id="set-model" dir="ltr" placeholder="خالی = پیش‌فرض"></div>
+      <label>صدای خورشید</label>
+      <div class="row"><select id="set-voice"><option>Kore</option><option>Charon</option><option>Fenrir</option><option>Aoede</option><option>Puck</option></select>
+      <button class="btn mini" onclick="saveSettings()">💾 ذخیره</button></div>
+      <div class="hint">💡 هات‌کی با دستور <code>khorshid hotkey --daemon</code> روی سیستمت روشن می‌ماند.</div>
+    </div>
+    <div class="card"><h3>🌐 مرورگر واقعی</h3>
+      <div class="row"><input id="b-url" dir="ltr" placeholder="https://..."><button class="btn mini" onclick="bOp('open',{url:$('#b-url').value})">باز کن</button></div>
+      <div class="row"><input id="b-q" placeholder="جست‌وجو در گوگل..."><button class="btn mini" onclick="bOp('google',{query:$('#b-q').value})">🔍</button></div>
+      <div class="row"><button class="btn mini" onclick="bOp('forms')">📝 فرم‌ها</button>
+        <button class="btn mini" onclick="bOp('snapshot')">🧭 عناصر</button>
+        <button class="btn mini" onclick="bOp('text')">📄 متن</button></div>
+      <div class="row"><input id="b-ref" placeholder="ایندکس" style="max-width:80px" dir="ltr">
+        <input id="b-text" placeholder="متن تایپ...">
+        <button class="btn mini" onclick="bOp('click',{ref:$('#b-ref').value})">کلیک</button>
+        <button class="btn mini" onclick="bOp('type',{ref:$('#b-ref').value,text:$('#b-text').value,submit:true})">تایپ+Enter</button></div>
+      <div class="row"><button class="btn mini" onclick="bOp('shot')">📸 عکس</button>
+        <button class="btn mini" onclick="bOp('close')">✖ بستن</button></div>
+      <img id="b-shot" style="display:none;margin-top:8px" alt="">
+      <pre class="out" id="b-result">خروجی مرورگر اینجا...</pre>
+    </div>
+    <div class="card"><h3>📝 حل آزمون سایت</h3>
+      <div class="row"><input id="q-url" dir="ltr" placeholder="آدرس صفحه آزمون..."></div>
+      <div class="row"><button class="btn mini go" onclick="runQuiz()" style="flex:1">✨ حل کن و گزینه‌های صحیح را بزن</button></div>
+      <div class="hint">نیاز به Playwright + مغز واقعی (Gemini). بدون ثبت نهایی (امن).</div>
+      <div class="list" id="q-report" style="margin-top:8px"></div>
+    </div>
+    <div class="card"><h3>🕘 تاریخچه گفت‌وگو</h3>
+      <div class="row"><button class="btn mini" onclick="loadHistory()">🔄</button>
+      <button class="btn mini" onclick="exportHistory()">💾 خروجی</button>
+      <button class="btn mini" onclick="clearHistory()">🗑 پاک</button></div>
+      <div class="list" id="history"></div>
+    </div>
+    <div class="card"><h3>📸 صفحه کامپیوتر</h3>
+      <img id="shot" src="/api/screenshot" alt="screenshot">
+      <div class="row" style="margin-top:8px"><button class="btn mini" onclick="refreshShot()">🔄 تازه‌سازی</button>
+      <button class="btn mini" onclick="askShot()">👁️ این صفحه چیه؟</button>
+      <button class="btn mini" onclick="analyzeShot()">🔍 تحلیل با بینایی</button></div>
+      <div class="out" id="vision-out" style="display:none"></div>
+    </div>
+    <div class="card"><h3>📋 کارها</h3>
+      <div class="row"><input id="todo-in" placeholder="کار جدید..."><button class="btn mini" onclick="addTodo()">+</button></div>
+      <div class="list" id="todos"></div>
+    </div>
+    <div class="card"><h3>🧠 حافظه</h3>
+      <div class="row"><input id="mem-q" placeholder="جست‌وجو..."><button class="btn mini" onclick="memSearch()">🔍</button></div>
+      <div class="row"><input id="mem-add" placeholder="به خاطر بسپار..."><button class="btn mini" onclick="memAdd()">+</button></div>
+      <div class="list" id="mem"></div>
+    </div>
+    <details class="card"><summary>🖥️ وضعیت سیستم</summary><div class="kv" id="sysinfo" style="margin-top:8px">…</div></details>
+    <details class="card"><summary>🔧 ابزارها</summary><div class="list" id="tools" style="margin-top:8px"></div></details>
+  </aside>
+</main>
+<div id="toasts"></div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(p,o={}){const r=await fetch(p,{headers:{'Content-Type':'application/json'},...o});return r.json();}
+function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;$('#toasts').append(d);setTimeout(()=>d.remove(),3800);}
+function md(t){t=esc(t);const codes=[];
+  t=t.replace(/```(\w*)\n?([\s\S]*?)```/g,(m,l,c)=>{codes.push('<pre><code>'+c.replace(/\n$/,'')+'</code></pre>');return '\u0000'+(codes.length-1)+'\u0000';});
+  t=t.replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+  const lines=t.split('\n');let out='',inT=false;
+  for(const ln of lines){
+    if(/^\s*\|.*\|\s*$/.test(ln)&&!/^\s*\|[\s:\-|]+\|\s*$/.test(ln)){
+      if(!inT){out+='<table>';inT=true;}
+      out+='<tr>'+ln.trim().replace(/^\||\|$/g,'').split('|').map(c=>'<td>'+c.trim()+'</td>').join('')+'</tr>';
+    }else{if(inT){out+='</table>';inT=false;}
+      if(!/^\s*\|[\s:\-|]+\|\s*$/.test(ln))out+=ln+'<br>';}}
+  if(inT)out+='</table>';
+  return out.replace(/\u0000(\d+)\u0000/g,(m,i)=>codes[+i]);}
+function addMsg(who,html){const d=document.createElement('div');d.className='msg '+who;d.innerHTML=html;
+  if(who==='bot'){const b=document.createElement('button');b.className='copy';b.textContent='📋';b.title='کپی';
+    b.onclick=()=>{navigator.clipboard.writeText(d.innerText.replace('📋',''));toast('📋 کپی شد');};d.append(b);}
+  $('#msgs').append(d);d.scrollIntoView({behavior:'smooth'});}
+function addTrace(tools){const d=document.createElement('div');d.className='trace';
+  d.innerHTML='<b>⚙️ '+tools.length+' ابزار اجرا شد:</b> '+tools.map(t=>(t.success?'✅ ':'❌ ')+esc(t.name)).join(' · ')
+  +'<details><summary>جزئیات</summary>'+tools.map(t=>'<pre><b>'+esc(t.name)+'</b>\n'+esc(t.content||'')+'</pre>').join('')+'</details>';
+  $('#msgs').append(d);d.scrollIntoView({behavior:'smooth'});}
+function typing(on){let t=$('#typing');if(on&&!t){t=document.createElement('div');t.id='typing';t.className='typing';t.innerHTML='<span>●</span><span>●</span><span>●</span>';$('#msgs').append(t);t.scrollIntoView();}if(!on&&t)t.remove();}
+async function send(text){text=(text??$('#input').value).trim();if(!text)return;$('#input').value='';
+  addMsg('user',esc(text));typing(true);
+  try{const d=await api('/api/chat',{method:'POST',body:JSON.stringify({message:text,agent:$('#agent').value})});
+    typing(false);
+    if(d.ok){addMsg('bot',md(d.reply));if(d.tools&&d.tools.length)addTrace(d.tools);speakIfOn(d.reply);loadHistory();}
+    else addMsg('bot','❌ خطا: '+esc(d.error||'?'));
+  }catch(e){typing(false);addMsg('bot','❌ ارتباط با سرور قطع شد.');}}
+$('#send').onclick=()=>send();$('#input').onkeydown=e=>{if(e.key==='Enter')send();};
+$('#clr').onclick=()=>{$('#msgs').innerHTML='';greet();};
+function greet(){addMsg('bot','سلام قربان! 👋 من <b>خورشید نهایی</b> هستم.<br>بنویس، حرف بزن 🎤، یا از پنل‌ها استفاده کن: مرورگر واقعی 🌐، حل آزمون 📝، تنظیمات ⚙️');}
+api('/api/agents').then(d=>{const fa={computer:'🖥️ کامپیوتر',orchestrator:'🔧 ارکستر',react:'💭 ReAct',codeact:'🐍 کد',planner:'📋 برنامه‌ریز',researcher:'🔬 محقق',autonomous:'🤖 خودمختار',simple:'💬 ساده',quiz:'📝 آزمون'};
+  $('#agent').innerHTML=(d.agents||['computer']).map(a=>'<option value="'+a+'"'+(a==='computer'?' selected':'')+'>'+(fa[a]||a)+'</option>').join('');});
+['تتر چنده؟','ساعت چنده؟','برو توی گوگل سرچ کن تتر چنده','از صفحه اسکرین‌شات بگیر','سوال‌های این صفحه را جواب بده'].forEach(c=>{
+  const b=document.createElement('button');b.className='chip';b.textContent=c;b.onclick=()=>send(c);$('#chips').append(b);});
+function refreshStatus(){api('/api/status').then(s=>{$('#p-engine').textContent='⚡ '+s.engine;$('#p-model').textContent='🧠 '+s.model;$('#p-tools').textContent='🔧 '+s.tools+' ابزار';});}
+refreshStatus();
+function tick(){const d=new Date();try{$('#clock-fa').textContent=new Intl.DateTimeFormat('fa-IR',{dateStyle:'full',timeStyle:'short'}).format(d);
+  $('#clock-en').textContent=new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(d);}catch(e){$('#clock-fa').textContent=d.toLocaleString();}}
+setInterval(tick,10000);tick();
+api('/api/sysinfo').then(s=>{$('#sysinfo').textContent=s.text||'?';});
+async function loadTodos(){const d=await api('/api/todos');
+  $('#todos').innerHTML=(d.items||[]).map(t=>'<div class="todo'+(t.done?' done':'')+'"><span>#'+t.id+' '+esc(t.text)+'</span>'+(t.done?'':'<button class="btn mini" onclick="doneTodo('+t.id+')">✓</button>')+'</div>').join('')||'(خالی)';}
+async function addTodo(){const v=$('#todo-in').value.trim();if(!v)return;await api('/api/todos',{method:'POST',body:JSON.stringify({action:'add',text:v})});$('#todo-in').value='';loadTodos();}
+async function doneTodo(id){await api('/api/todos',{method:'POST',body:JSON.stringify({action:'done',id})});loadTodos();}
+loadTodos();
+async function memSearch(){const q=$('#mem-q').value;const d=await api('/api/memory?q='+encodeURIComponent(q||'&recent=1'));
+  $('#mem').innerHTML=(d.items||[]).map(m=>'#'+m.id+': '+esc(m.text.slice(0,120))).join('<br>')||'(خالی)';}
+async function memAdd(){const v=$('#mem-add').value.trim();if(!v)return;await api('/api/memory',{method:'POST',body:JSON.stringify({text:v})});$('#mem-add').value='';toast('🧠 ذخیره شد');}
+memSearch();
+api('/api/tools').then(d=>{$('#tools').innerHTML=(d.tools||[]).map(t=>'🔹 <b>'+t.name+'</b> <span style="opacity:.7">'+esc(t.desc||'')+'</span>').join('<br>');});
+function refreshShot(){$('#shot').src='/api/screenshot?ts='+Date.now();}
+function askShot(){send('از صفحه اسکرین‌شات بگیر و بعد توصیف کن چه می‌بینی');}
+// تنظیمات
+async function loadSettings(){try{const d=await api('/api/settings');const s=d.settings||{};
+  $('#set-hotkey').value=s.hotkey||'ctrl';$('#set-hk-desc').textContent=s.hotkey_describe||'';
+  $('#set-engine').value=s.engine||'';$('#set-model').value=s.model||'';$('#set-voice').value=s.voice||'Kore';
+  $('#set-action').value=s.hotkey_action||'voice';$('#p-hotkey').textContent='⌨️ '+(s.hotkey||'ctrl');}catch(e){}}
+async function saveSettings(){try{const d=await api('/api/settings',{method:'POST',body:JSON.stringify({
+  hotkey:$('#set-hotkey').value,hotkey_action:$('#set-action').value,engine:$('#set-engine').value,
+  model:$('#set-model').value,voice:$('#set-voice').value})});
+  if(d.ok){$('#set-hk-desc').textContent=d.settings.hotkey_describe;$('#p-hotkey').textContent='⌨️ '+d.settings.hotkey;
+    toast('⚙️ ذخیره شد');refreshStatus();}else toast('❌ خطا');}catch(e){toast('❌ ارتباط قطع شد');}}
+loadSettings();
+// مرورگر
+async function bOp(op,extra){extra=extra||{};$('#b-result').textContent='⏳ ...';
+  try{const d=await api('/api/browser',{method:'POST',body:JSON.stringify(Object.assign({op},extra))});
+    if(op==='shot'&&d.ok&&d.image){$('#b-shot').style.display='block';$('#b-shot').src=d.image;$('#b-result').textContent='📸 عکس گرفته شد.';}
+    else $('#b-result').textContent=(d.ok?'✅ ':'❌ ')+(d.result||d.error||'');
+  }catch(e){$('#b-result').textContent='❌ ارتباط قطع شد.';}}
+// آزمون
+async function runQuiz(){const url=$('#q-url').value.trim();if(!url){toast('اول آدرس صفحه آزمون را بده');return;}
+  $('#q-report').innerHTML='⏳ در حال حل آزمون... (ممکن است ۱-۲ دقیقه طول بکشد)';
+  try{const d=await api('/api/quiz',{method:'POST',body:JSON.stringify({url})});
+    $('#q-report').innerHTML=d.ok?md(d.report):'❌ '+esc(d.error||'?');}catch(e){$('#q-report').textContent='❌ ارتباط قطع شد.';}}
+// تاریخچه
+async function loadHistory(){try{const d=await api('/api/history');
+  window._hist={};(d.items||[]).forEach(h=>window._hist[h.id]=h.query);
+  $('#history').innerHTML=(d.items||[]).map(h=>'<div class="hitem" onclick="resend('+h.id+')" title="'+esc(h.ts||'')+'">'+esc(h.query.slice(0,60))+'</div>').join('')||'(خالی)';}catch(e){}}
+function resend(id){if(window._hist&&window._hist[id])send(window._hist[id]);}
+async function clearHistory(){await api('/api/history/clear',{method:'POST',body:'{}'});loadHistory();}
+async function exportHistory(){try{const d=await api('/api/history?limit=500');
+  const blob=new Blob([JSON.stringify(d.items||[],null,1)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='khorshid-history.json';a.click();}catch(e){alert('خطا: '+e);}}
+async function analyzeShot(){const o=$('#vision-out');o.style.display='block';o.textContent='🔍 در حال تحلیل صفحه...';
+  try{const d=await api('/api/vision',{method:'POST',body:JSON.stringify({})});
+  o.innerHTML=md(d.result||'(خالی)');}catch(e){o.textContent='خطا: '+e;}}
+loadHistory();
+let rec=null,recording=false;
+$('#mic').onclick=()=>{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){toast('مرورگر کروم لازم است 🎤');return;}
+  if(recording){rec.stop();return;}
+  rec=new SR();rec.lang='fa-IR';
+  rec.onresult=e=>send(e.results[0][0].transcript);
+  rec.onend=()=>{recording=false;$('#mic').classList.remove('rec');};
+  rec.onerror=e=>{recording=false;$('#mic').classList.remove('rec');toast('خطا: '+e.error);};
+  rec.start();recording=true;$('#mic').classList.add('rec');toast('🎤 گوش می‌دهم...');};
+let voiceOn=true;
+$('#spk').onclick=()=>{voiceOn=!voiceOn;$('#spk').classList.toggle('off',!voiceOn);$('#spk').textContent=voiceOn?'🔊':'🔇';};
+async function speakIfOn(text){if(!voiceOn)return;
+  const clean=text.replace(/```[\s\S]*?```/g,' ').replace(/[*#`>|]/g,' ').slice(0,1200);
+  try{const r=await fetch('/api/speak',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:clean})});
+    if(r.ok&&(r.headers.get('content-type')||'').includes('audio')){new Audio(URL.createObjectURL(await r.blob())).play();return;}}catch(e){}
+  try{const u=new SpeechSynthesisUtterance(clean);u.lang='fa-IR';speechSynthesis.speak(u);}catch(e){}}
+greet();
+</script>
+</body>
+</html>
