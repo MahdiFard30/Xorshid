@@ -19,3 +19,24 @@ checkpoints/
 *.key
 *.log
 node_modules/
+/local-readme-backups/
+/local-mt5-backups/
+/local-backups/
+/.khorshid-multi/*/trade_memory.sqlite*
+
+# Local environments and generated state (existing files are preserved).
+/.khorshid-live-venv/
+/.khorshid-vc-venv/
+/.khorshid-demo/
+/.khorshid-multi/
+/.khorshid-backups/
+/.tts_debug/
+/.khorshid-browser/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/

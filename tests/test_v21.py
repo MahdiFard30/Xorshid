@@ -68,7 +68,9 @@ def test_estimator_and_trim():
             return {"content": "خلاصه"}
     summ = make_summarizer(E(), "mock")
     short = summ(msgs * 3, keep_last=4)
-    assert len(short) < len(msgs * 3) and "خلاصه" in short[0]["content"]
+    assert len(short) < len(msgs * 3)
+    assert any('خلاصه گفت‌وگوی قبلی' in m['content'] for m in short)
+    assert short[0] == msgs[0]
 
 
 # ---------- retry ----------
@@ -518,7 +520,7 @@ def test_runtime_stream_sink():
 def test_shell_blocked_and_offline_run():
     from ultimate_khorshid.core.config import KhorshidConfig
     from ultimate_khorshid.runtime import KhorshidRuntime
-    rt = KhorshidRuntime(KhorshidConfig())
+    rt = KhorshidRuntime(KhorshidConfig(), confirm_callback=lambda _: True)
     r = rt.executor.execute(_tc("shell_exec", '{"command": "rm -rf /tmp/x"}'))
     assert not r.success and "مسدود" in r.content
     r = rt.executor.execute(_tc("python_exec", '{"code": "print(6*7)"}'))

@@ -96,13 +96,16 @@ def test_new_server_endpoints():
 def _ptt_mgr(combo="ctrl", **kw):
     """مدیر پوش‌تو‌تاک با ضبط جعلی — بدون میکروفون/کیبورد واقعی."""
     from ultimate_khorshid.hotkey.manager import HotkeyManager
+    import threading
     got = []
+    ready = threading.Event()
     kw.setdefault("hold_threshold", 0)
     kw.setdefault("max_record", 0)
-    m = HotkeyManager(combo, on_text=got.append, **kw)
+    m = HotkeyManager(combo, on_text=lambda q: (got.append(q), ready.set()), **kw)
     m._start_capture = lambda: True
-    m._capture_transcript = lambda: "تتر چنده"
+    m._capture_transcript = lambda path: "تتر چنده"
     m._got = got
+    m._ready = ready
     return m
 
 
@@ -111,7 +114,9 @@ def test_ptt_hold_release_triggers():
     m.press("ctrl")
     assert m._armed is True
     m.release("ctrl")
+    assert m._ready.wait(2)
     assert m._got == ["تتر چنده"]
+    m.stop()
 
 
 def test_ptt_quick_tap_does_nothing():
@@ -140,9 +145,11 @@ def test_ptt_combo_hold_release():
     m.press("j")
     assert m._armed is True
     m.release("j")  # ول کردن بخشی از ترکیب → پردازش
+    assert m._ready.wait(2)
     assert m._got == ["تتر چنده"]
     m.release("ctrl")
     m.release("shift")
+    m.stop()
 
 
 def test_ptt_dashboard_action_no_recording():

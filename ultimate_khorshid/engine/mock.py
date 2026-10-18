@@ -379,6 +379,17 @@ class MockEngine(InferenceEngine):
 
     def _chat(self, q: str) -> str:
         ql = q.strip().lower()
+        # Basic recall is useful even without a real language model.
+        from ultimate_khorshid.memory.automatic import _background, words
+        try:
+            data = json.loads(_background.get() or "{}")
+            facts = data.get("memory", {}).get("user_facts", [])
+            if any(w in ql for w in ("؟", "?", "چیه", "کجاست", "چی بود", "what", "where")):
+                matches = [f for f in facts if words(q) & words(f)]
+                if matches:
+                    return "طبق اطلاعاتی که قبلاً گفتی:\n" + "\n".join(matches)
+        except (ValueError, TypeError):
+            pass
         if re.match(r"^(سلام|درود|hi|hello)", ql):
             return ("سلام قربان. 👋 من **خورشید نهایی** هستم — ایجنت کامپیوتری شما.\n\n"
                     "می‌توانم فایل بسازم و بخوانم، دستور شل اجرا کنم، کد پایتون بنویسم و اجرا کنم، "
@@ -402,3 +413,4 @@ class MockEngine(InferenceEngine):
         return (f"متوجه شدم قربان. در حالت آفلاین هستم و پاسخ جامعی برای «{q[:80]}» ندارم.\n\n"
                 "می‌توانید از من بخواهید فایل بخوانم/بنویسم، دستوری اجرا کنم، محاسبه کنم یا در وب جست‌وجو کنم.\n"
                 "برای پاسخ‌های هوشمندتر، موتور Ollama یا OpenAI را فعال کنید (`khorshid doctor`).")
+

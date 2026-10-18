@@ -5,7 +5,7 @@
 def _rt():
     from ultimate_khorshid.core.config import KhorshidConfig
     from ultimate_khorshid.runtime import KhorshidRuntime
-    return KhorshidRuntime(KhorshidConfig())
+    return KhorshidRuntime(KhorshidConfig(), confirm_callback=lambda _: True)
 
 
 def test_registries():

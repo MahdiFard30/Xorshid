@@ -12,7 +12,7 @@ from ultimate_khorshid.runtime import KhorshidRuntime
 
 @pytest.fixture()
 def rt():
-    return KhorshidRuntime(KhorshidConfig())
+    return KhorshidRuntime(KhorshidConfig(), confirm_callback=lambda _: True)
 
 
 def test_calc(rt):

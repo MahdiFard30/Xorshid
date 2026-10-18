@@ -16,7 +16,7 @@ from ultimate_khorshid.core.registry import AgentRegistry, ToolRegistry
 from ultimate_khorshid.core.types import Conversation
 
 
-TOOL_MODULES = ("essentials", "files", "shell", "web", "system", "memory_tools",
+TOOL_MODULES = ("mt5_demo", 'mt5_bridge', 'mt5_strategies', "essentials", "files", "shell", "web", "system", "memory_tools",
                 "crypto", "desktop", "browser", "vision", "voice_tools",
                 "weather", "notify")
 AGENT_MODULES = ("simple", "react", "orchestrator", "codeact", "planner",
@@ -55,24 +55,22 @@ class KhorshidRuntime:
 
     def __init__(self, cfg: Optional[KhorshidConfig] = None,
                  confirm_callback: Optional[Callable[[str], bool]] = None,
-                 interactive: bool = False) -> None:
+                 interactive: bool = False, allow_unconfirmed: bool = False) -> None:
         from ultimate_khorshid.engine.discovery import engine_for_model
         from ultimate_khorshid.tools.base import ToolExecutor
         from ultimate_khorshid.skills.manager import SkillManager
 
         _ensure_imports()
         self.cfg = cfg or load_config()
-        try:
-            from ultimate_khorshid.core.settings import apply_to_config
-            apply_to_config(self.cfg)  # اورلی تنظیمات داشبورد (engine/model/voice)
-        except Exception:
-            pass
         self.bus = EventBus()
         self.model = self.cfg.intelligence.default_model
         self.engine = engine_for_model(self.model, self.cfg)
+        if self.engine.engine_id == "gemini":
+            from ultimate_khorshid.engine.response_failover import ResponseFailover
+            self.engine = ResponseFailover(self.engine, self.cfg)
 
         # ابزارها
-        wanted = (self.cfg.agent.tools or "*").strip()
+        wanted = self.cfg.agent.tools.strip()
         tools = []
         for name, cls in ToolRegistry.items():
             if wanted not in ("*", "all") and name not in [w.strip() for w in wanted.split(",")]:
@@ -86,7 +84,8 @@ class KhorshidRuntime:
             if unknown:
                 raise ValueError("Unknown configured tools: " + ", ".join(sorted(unknown)))
         self.executor = ToolExecutor(tools, bus=self.bus, interactive=interactive,
-                                     confirm_callback=confirm_callback)
+                                     confirm_callback=confirm_callback,
+                                     allow_unconfirmed=allow_unconfirmed)
         self.tool_names = [t.spec.name for t in tools]
         self.skills = SkillManager([str(Path.home() / ".ultimate-jarvis" / "skills")])
         self.persona = load_persona(self.cfg.agent.persona)
@@ -112,26 +111,89 @@ class KhorshidRuntime:
     def ask(self, query: str, agent: Optional[str] = None,
             memory: bool | None = None, stream: bool = False,
             on_token: Any = None, trace_name: str = "ask",
-            extra_meta: Optional[Dict[str, str]] = None) -> Any:
+            extra_meta: Optional[Dict[str, str]] = None,
+            session_id: str = "local", memory_scope: str = "local") -> Any:
+        from ultimate_khorshid.memory.automatic import scoped_path, session_lock
+        path = scoped_path(self.cfg.storage.db_path, memory_scope)
+        with session_lock(path, session_id):
+            return self._ask_remember(query, agent, memory, stream, on_token,
+                                      trace_name, extra_meta, session_id, memory_scope)
+
+    def _ask_remember(self, query: str, agent: Optional[str] = None,
+            memory: bool | None = None, stream: bool = False,
+            on_token: Any = None, trace_name: str = "ask",
+            extra_meta: Optional[Dict[str, str]] = None,
+            session_id: str = "local", memory_scope: str = "local") -> Any:
+        """Remember turns and outcomes across runtime instances/restarts.
+
+        memory=False disables reads, automatic writes and memory tools for this turn.
+        Non-local callers must supply a trusted scope (e.g. Telegram chat/user ID).
+        """
+        import json
+        import warnings
+        from ultimate_khorshid.memory.automatic import AutomaticMemory, memory_context, scoped_path
+        enabled = self.cfg.agent.context_from_memory if memory is None else memory
+        path = scoped_path(self.cfg.storage.db_path, memory_scope)
+        history, background, saved = [], "", None
+        if enabled:
+            try:
+                saved = AutomaticMemory(path, self.cfg.agent.memory_retention)
+                history = saved.recent(session_id, self.cfg.agent.history_turns)
+                background = json.dumps({"memory": json.loads(saved.context(query)),
+                                         "recent_conversation": [
+                                             {**m, "content": m["content"][:1000]} for m in history[-8:]]}, ensure_ascii=False)
+            except Exception as exc:
+                warnings.warn(f"Memory read failed: {exc}", RuntimeWarning)
+        with memory_context(path, bool(enabled), background) as calls:
+            try:
+                result = self._ask(query, agent, bool(enabled), stream, on_token, trace_name,
+                                   extra_meta, history)
+            except Exception as exc:
+                if saved is not None and self.cfg.agent.auto_memory:
+                    try:
+                        saved.remember(session_id, query, f"Execution failed: {exc}", calls, "error")
+                    except Exception as err:
+                        warnings.warn(f"Memory write failed: {err}", RuntimeWarning)
+                raise
+            if saved is not None and self.cfg.agent.auto_memory:
+                outcome = ("cancelled" if result.metadata.get("cancelled") else
+                           "incomplete" if result.metadata.get("max_turns_exceeded") else
+                           "tool_errors" if any(not c["success"] for c in calls) else
+                           "tools_ok" if calls else "unverified_reply")
+                try:
+                    saved.remember(session_id, query, result.content, calls, outcome)
+                    result.metadata["memory_saved"] = True
+                except Exception as exc:
+                    result.metadata["memory_saved"] = False
+                    warnings.warn(f"Memory write failed: {exc}", RuntimeWarning)
+            result.metadata["session_id"] = session_id
+            return result
+
+    def _ask(self, query: str, agent: Optional[str] = None,
+             memory: bool = True, stream: bool = False, on_token: Any = None,
+             trace_name: str = "ask", extra_meta: Optional[Dict[str, str]] = None,
+             history: Optional[List[Dict[str, str]]] = None) -> Any:
         """یک سؤال → AgentResult. (با trace، کنترل لغو، بلک‌برد مشترک و استریم اختیاری)"""
         from ultimate_khorshid.agents.base import AgentContext, AgentResult
         from ultimate_khorshid.core.blackboard import Blackboard, use_board
-        from ultimate_khorshid.core.control import CancelledError, RunController, use_controller
+        from ultimate_khorshid.core.control import CancelledError, RunController, current_controller, use_controller
         from ultimate_khorshid.core.tracing import Tracer, use_tracer
         use_mem = self.cfg.agent.context_from_memory if memory is None else memory
         mem_hits: List[Any] = []
         if use_mem:
             try:
                 from ultimate_khorshid.memory.store import get_memory
-                mem_hits = get_memory(self.cfg.storage.db_path).search(query, 4)
+                mem_hits = get_memory().search(query, 4)
             except Exception:
                 pass
-        tracer, ctrl, board = Tracer(), RunController(), Blackboard()
+        tracer, ctrl, board = Tracer(), current_controller() or RunController(), Blackboard()
         self.last_controller, self.last_board = ctrl, board
         tid = tracer.start_trace(trace_name, {"agent": agent or self.cfg.agent.default_agent,
                                               "q": query[:200], "stream": bool(stream)})
         self.last_trace_id = tid
         conv = Conversation()
+        for message in history or []:
+            conv.add(message["role"], message["content"])
         conv.add("user", query)
         meta: Dict[str, Any] = {"stream": bool(stream)}
         if extra_meta:
@@ -140,12 +202,25 @@ class KhorshidRuntime:
                            metadata=meta)
         if on_token is not None:
             ctx.metadata["on_token"] = on_token
-        ag = self.build_agent(agent)
-        from ultimate_khorshid.agents.base import stream_sink_ctx
+        from ultimate_khorshid.tools.mt5_demo import direct_command
+        direct_action = direct_command(query)
+        ag = self.build_agent(agent) if direct_action is None else None
+        from ultimate_khorshid.agents.base import stream_sink_ctx, provider_trace_ctx
         with use_tracer(tracer, tid), use_controller(ctrl), use_board(board), \
-                stream_sink_ctx(on_token):
+                stream_sink_ctx(on_token), provider_trace_ctx() as providers:
             try:
-                result = ag.run(ctx)
+                ctrl.check()
+                if direct_action is not None:
+                    import json
+                    from ultimate_khorshid.core.types import ToolCall
+                    tr = self.executor.execute(ToolCall(
+                        name="mt5_demo", arguments=json.dumps({"action": direct_action})))
+                    result = AgentResult(content=tr.metadata.get("summary", tr.content),
+                                         tool_results=[tr],
+                                         metadata={"agent": "demo-controller", "model": "deterministic"})
+                else:
+                    result = ag.run(ctx)
+                ctrl.check()
                 tracer.end_trace(tid, "ok")
             except CancelledError as e:
                 tracer.end_trace(tid, "cancelled")
@@ -155,15 +230,19 @@ class KhorshidRuntime:
                 raise
         try:
             result.metadata["trace_id"] = tid
+            if providers:
+                final = providers[-1]
+                result.metadata.update(engine=final['engine'], model=final['model'],
+                                       fallback=final['fallback'], provider_calls=providers,
+                                       usage={'input_tokens':sum(p['input_tokens'] for p in providers),
+                                              'output_tokens':sum(p['output_tokens'] for p in providers),
+                                              'estimated':any(p['input_estimated'] or p['output_estimated'] for p in providers)})
         except Exception:
             pass
         return result
 
     def chat_loop(self, agent: Optional[str] = None) -> None:
-        from ultimate_khorshid.agents.base import AgentContext
         print("🤖 خورشید نهایی — برای خروج بنویسید: exit / خروج\n")
-        conv = Conversation()
-        ag = self.build_agent(agent)
         while True:
             try:
                 q = input("شما: ").strip()
@@ -175,31 +254,20 @@ class KhorshidRuntime:
                 break
             if not q:
                 continue
-            conv.add("user", q)
-            ctx = AgentContext(conversation=conv, tools=self.tool_names)
             try:
-                r = ag.run(ctx)
+                r = self.ask(q, agent=agent)
             except Exception as e:
                 print(f"❌ خطا: {e}\n")
                 continue
-            conv.add("assistant", r.content)
             print(f"\nخورشید:\n{r.content}\n")
-            try:  # sliding window: چت‌های طولانی حافظه را منفجر نکنند
-                from ultimate_khorshid.core import context as Ctx
-                ds = [m.to_dict() for m in conv.messages]
-                kept, dropped, _ = Ctx.trim_messages(ds, Ctx.DEFAULT_BUDGET * 2)
-                if dropped:
-                    conv = Conversation()
-                    for d in kept:
-                        conv.add(d.get("role", "user"), str(d.get("content", "")))
-                    print(f"(🧹 {dropped} پیام قدیمی از پنجره چت خارج شد)\n")
-            except Exception:
-                pass
 
 
 def ask(query: str, agent: str = "computer", config: Optional[str] = None) -> str:
     rt = KhorshidRuntime(load_config(config) if config else None)
-    return rt.ask(query, agent=agent).content
+    try:
+        return rt.ask(query, agent=agent).content
+    finally:
+        rt.executor.shutdown()
 
 
 def list_agents() -> List[str]:
@@ -216,3 +284,4 @@ def list_tools() -> Dict[str, str]:
         except Exception:
             out[name] = "?"
     return out
+

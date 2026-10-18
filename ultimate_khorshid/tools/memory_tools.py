@@ -9,6 +9,9 @@ from ultimate_khorshid.tools.base import BaseTool, ToolSpec
 
 
 def _mem() -> Any:
+    from ultimate_khorshid.memory.automatic import _enabled
+    if not _enabled.get():
+        raise RuntimeError("حافظه برای این درخواست غیرفعال است.")
     from ultimate_khorshid.memory.store import get_memory
     return get_memory()
 
@@ -49,8 +52,17 @@ class MemorySearchTool(BaseTool):
 
     def execute(self, **p: Any) -> ToolResult:
         q = str(p.get("query", "")).strip()
-        hits = _mem().search(q, int(p.get("limit", 5) or 5))
-        if not hits:
+        mem = _mem()
+        limit = max(1, min(int(p.get("limit", 5) or 5), 20))
+        hits = mem.search(q, limit)
+        from ultimate_khorshid.memory.automatic import AutomaticMemory, words
+        auto = AutomaticMemory(str(mem.path))
+        facts = [f for f in auto.facts() if words(q) & words(f)]
+        episodes = auto.recall(q, limit)
+        if not hits and not facts and not episodes:
             return ToolResult(tool_name="memory_search", content="چیزی در حافظه پیدا نشد.")
         lines = [f"#{h.id} [{h.created}] ({h.source}): {h.text[:300]}" for h in hits]
+        lines.extend("[اطلاعات کاربر] " + f for f in facts)
+        lines.extend("[گفتگوی قبلی] " + e["query"] + " | " + e["outcome"] for e in episodes)
         return ToolResult(tool_name="memory_search", content="🧠 یافته‌ها:\n" + "\n".join(lines))
+

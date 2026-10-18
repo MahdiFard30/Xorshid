@@ -1,4 +1,5 @@
-# وابستگی اجباری: هیچ! (فقط stdlib پایتون 3.10+)
+# هسته با stdlib؛ فقط Python 3.10 برای TOML به tomli نیاز دارد.
+tomli>=2; python_version < "3.11"
 # اختیاری:
 # openai>=1.0        # اگر می‌خواهی با SDK رسمی OpenAI کار کنی (موتور داخلی بدون آن هم کار می‌کند)
 # fastapi>=0.100     # فقط اگر create_fastapi_app می‌خواهی

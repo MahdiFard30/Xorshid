@@ -12,6 +12,9 @@ default_agent = "computer"
 max_turns = 12
 tools = "*"
 context_from_memory = true
+auto_memory = true
+history_turns = 8
+memory_retention = 1000
 persona = "khorshid"
 language = "fa"
 
@@ -27,6 +30,11 @@ base_url = "https://api.openai.com/v1"
 model = "gpt-4o-mini"
 # api_key = "sk-..."  # یا متغیر محیطی OPENAI_API_KEY
 
+[engine.groq]
+model = "openai/gpt-oss-120b"
+# Dedicated key: GROQ_API_KEY or the project-local .groq.key file.
+# Fallback order with a key: Gemini -> Groq -> Ollama -> Mock.
+
 [tools]
 confirm_dangerous = true
 workspace = "~/ultimate-jarvis-workspace"
@@ -39,3 +47,4 @@ db_path = "~/.ultimate-jarvis/memory.db"
 host = "127.0.0.1"
 port = 8899
 agent = "computer"
+

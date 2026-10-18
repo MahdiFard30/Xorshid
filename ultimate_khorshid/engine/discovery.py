@@ -9,7 +9,7 @@ from ultimate_khorshid.engine.base import InferenceEngine
 # ایمپورت برای رجیستر شدن — مهم!
 import importlib
 
-for _mod in ("mock", "ollama", "openai_compat", "gemini"):
+for _mod in ("mock", "ollama", "openai_compat", "gemini", "groq"):
     importlib.import_module(f"ultimate_khorshid.engine.{_mod}")
 
 
@@ -17,6 +17,8 @@ def get_engine(name: str, cfg: KhorshidConfig | None = None) -> InferenceEngine:
     name = (name or "mock").lower()
     if name == "mock":
         return EngineRegistry.create("mock")
+    if name == 'groq':
+        return EngineRegistry.create('groq', api_key=cfg.engine.groq_api_key if cfg else '')
     if name == "ollama":
         host = cfg.engine.ollama_host if cfg else ""
         return EngineRegistry.create("ollama", host=host or "http://localhost:11434")

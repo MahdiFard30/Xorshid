@@ -52,6 +52,7 @@ class ToolExecutor:
     def __init__(self, tools: List[BaseTool], bus: Optional[EventBus] = None, *,
                  interactive: bool = False,
                  confirm_callback: Optional[Callable[[str], bool]] = None,
+                 allow_unconfirmed: bool = False,
                  default_timeout: float = 60.0,
                  max_retries: int = 1, retry_on_failure: bool = False,
                  fallbacks: Optional[Dict[str, str]] = None) -> None:
@@ -59,6 +60,7 @@ class ToolExecutor:
         self._bus = bus
         self._interactive = interactive
         self._confirm = confirm_callback
+        self._allow_unconfirmed = allow_unconfirmed
         self._default_timeout = default_timeout
         self._max_retries = max(0, max_retries)
         self._retry_on_failure = retry_on_failure
@@ -99,14 +101,17 @@ class ToolExecutor:
             return ToolResult(tool_name=call.name, content="پارامتر نامعتبر: " + "; ".join(errors), success=False)
 
         # تأییدیه برای ابزارهای خطرناک
-        if tool.spec.requires_confirmation and self._interactive:
+        from ultimate_khorshid.security.permissions import approval_required
+        if approval_required(tool.spec, params) and not self._allow_unconfirmed:
             ok = self._ask_confirm(tool.spec.name, params)
             if not ok:
                 if self._bus:
                     self._bus.publish("security_deny", tool=tool.spec.name)
-                return ToolResult(tool_name=call.name, content="کاربر اجازه نداد (denied).", success=False,
-                                  metadata={"denied": True})
+                return ToolResult(tool_name=call.name,
+                                  content="عملیات تأیید نشد؛ تغییری انجام نشد. برای این کار تأیید محلی لازم است.",
+                                  success=False, metadata={"denied": True, "approval_required": True})
 
+        check_cancelled()
         if self._bus:
             self._bus.publish("tool_call_start", tool=call.name, params=params)
         from ultimate_khorshid.core.tracing import traced_span
@@ -138,12 +143,14 @@ class ToolExecutor:
                 except Exception as e:
                     res = ToolResult(tool_name=call.name, content=f"خطای اجرا: {e}", success=False)
                     timed_out = True
-                should_retry = (not timed_out and attempts <= self._max_retries
+                should_retry = (not approval_required(tool.spec, params)
+                                and not timed_out and attempts <= self._max_retries
                                 and self._retry_on_failure and not res.success)
                 if not should_retry:
                     break
                 time.sleep(min(0.5 * attempts, 3.0))
-        if not res.success and not timed_out and _fb_depth < 2 and call.name in self._fallbacks:
+        if (not res.success and not timed_out and not approval_required(tool.spec, params)
+                and _fb_depth < 2 and call.name in self._fallbacks):
             fb = self._fallbacks[call.name]
             res = self.execute(ToolCall(name=fb, arguments=call.arguments, id=call.id),
                                _fb_depth + 1)
@@ -152,6 +159,8 @@ class ToolExecutor:
             except Exception:
                 pass
         res.latency_ms = (time.time() - t0) * 1000
+        from ultimate_khorshid.memory.automatic import record_tool
+        record_tool(call, res)
         if self._bus:
             self._bus.publish("tool_call_end", tool=call.name, success=res.success, latency_ms=res.latency_ms)
         return res
@@ -159,10 +168,13 @@ class ToolExecutor:
     def _ask_confirm(self, name: str, params: Dict[str, Any]) -> bool:
         if self._confirm:
             try:
-                return bool(self._confirm(f"اجرای ابزار `{name}` با {json.dumps(params, ensure_ascii=False)[:300]}؟"))
+                detail = json.dumps(params, ensure_ascii=False, indent=2)
+                if len(detail) > 12000:
+                    return False  # Never approve an operation whose details were hidden.
+                return bool(self._confirm(f"اجرای ابزار {name} با این پارامترها؟\n{detail}"))
             except Exception:
                 return False
-        return True
+        return False
 
     def shutdown(self) -> None:
         try:
@@ -182,3 +194,4 @@ def _safe_run(tool: BaseTool, params: Dict[str, Any]) -> ToolResult:
         return r
     except Exception as e:
         return ToolResult(tool_name=tool.spec.name, content=f"خطا: {e}", success=False)
+

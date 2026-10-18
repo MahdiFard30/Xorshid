@@ -27,14 +27,19 @@ DASHBOARD = Path(__file__).parent / "dashboard.html"
 HISTORY_DB = Path.home() / ".ultimate-jarvis" / "history.db"
 
 
-def _run_query(query: str, agent: str, model: str = "") -> dict:
+def _run_query(query: str, agent: str, model: str = "", session_id: str = "local") -> dict:
     from ultimate_khorshid.runtime import KhorshidRuntime
     cfg = load_config()
     if model:
         cfg.intelligence.default_model = model
     rt = KhorshidRuntime(cfg)
-    r = rt.ask(query, agent=agent or cfg.agent.default_agent)
-    return {"content": r.content, "turns": r.turns,
+    try:
+        r = rt.ask(query, agent=agent or cfg.agent.default_agent, session_id=session_id)
+    finally:
+        rt.executor.shutdown()
+    metadata = {key:r.metadata[key] for key in ('engine','model','fallback','provider_calls','usage')
+                if key in r.metadata}
+    return {"content": r.content, "turns": r.turns, 'metadata':metadata,
             "tools_used": [t.tool_name for t in r.tool_results],
             "tools": [{"name": t.tool_name, "success": t.success,
                        "content": t.content[:800]} for t in r.tool_results]}
@@ -152,6 +157,34 @@ def _run_quiz(data: dict) -> dict:
 class Handler(BaseHTTPRequestHandler):
     server_version = "UltimateKhorshid/1.0"
 
+    def _local_request(self) -> bool:
+        """Reject foreign browser origins/hosts, including DNS rebinding.
+
+        This local API trusts local programs. It is not a multi-user server.
+        """
+        import ipaddress
+        def loopback(host):
+            if host == "localhost":
+                return True
+            try:
+                return ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                return False
+        try:
+            host = urllib.parse.urlsplit("http://" + self.headers.get("Host", ""))
+            valid = loopback(host.hostname) and host.port == self.server.server_port
+            origin = self.headers.get("Origin")
+            if origin:
+                source = urllib.parse.urlsplit(origin)
+                valid = valid and source.scheme == "http" and loopback(source.hostname) and source.port == host.port
+            if self.command == "POST":
+                valid = valid and self.headers.get("Content-Type", "").split(";", 1)[0].strip() == "application/json"
+        except ValueError:
+            valid = False
+        if not valid:
+            self._send({"error": "Only same-origin local JSON API requests are accepted."}, 403)
+        return bool(valid)
+
     def _send(self, obj: Any, code: int = 200) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
@@ -170,12 +203,19 @@ class Handler(BaseHTTPRequestHandler):
     def _body(self) -> dict:
         try:
             length = int(self.headers.get("Content-Length", 0))
-            return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
-        except Exception:
-            return {}
+            if not 0 <= length <= 1_000_000:
+                raise ValueError("Request body must be at most 1 MB")
+            data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            if not isinstance(data, dict):
+                raise ValueError("Request body must be a JSON object")
+            return data
+        except (ValueError, UnicodeError):
+            raise ValueError("Invalid JSON object or request length (limit 1 MB)") from None
 
     # -- GET --
     def do_GET(self) -> None:  # noqa: N802
+        if not self._local_request():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path, qs = parsed.path, urllib.parse.parse_qs(parsed.query)
         try:
@@ -240,7 +280,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- POST --
     def do_POST(self) -> None:  # noqa: N802
-        data = self._body()
+        if not self._local_request():
+            return
+        try:
+            data = self._body()
+        except ValueError as exc:
+            return self._send({"error": str(exc)}, 400)
         try:
             if self.path == "/ask":
                 out = _run_query(str(data.get("query", "")), str(data.get("agent", "computer")),
@@ -253,19 +298,24 @@ class Handler(BaseHTTPRequestHandler):
                         user_q = str(m.get("content", ""))
                         break
                 out = _run_query(user_q, "computer", str(data.get("model", "")))
+                usage = out.get('metadata', {}).get('usage', {})
+                tokens_in, tokens_out = usage.get('input_tokens', 0), usage.get('output_tokens', 0)
                 return self._send({
                     "id": f"chatcmpl-{int(time.time())}", "object": "chat.completion",
-                    "created": int(time.time()), "model": data.get("model", "ultimate-khorshid"),
+                    "created": int(time.time()), "model": out.get('metadata', {}).get('model', data.get("model", "ultimate-khorshid")),
                     "choices": [{"index": 0, "message": {"role": "assistant", "content": out["content"]},
                                  "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}})
+                    "usage": {"prompt_tokens": tokens_in, "completion_tokens": tokens_out,
+                              "total_tokens": tokens_in + tokens_out},
+                    'usage_estimated':usage.get('estimated', False)})
             if self.path == "/api/chat":
                 agent = str(data.get("agent", "") or "computer")
                 msg = str(data.get("message", ""))
-                out = _run_query(msg, agent)
+                out = _run_query(msg, agent, session_id=str(data.get("session_id") or "local")[:200])
                 hist_add(agent, msg, out["content"])
                 return self._send({"ok": True, "reply": out["content"],
-                                   "tools": out["tools"], "turns": out["turns"]})
+                                   "tools": out["tools"], "turns": out["turns"],
+                                   'metadata':out.get('metadata', {})})
             if self.path == "/api/speak":
                 from ultimate_khorshid.voice.engines import api_key, GeminiTTS
                 if not api_key():
@@ -287,8 +337,11 @@ class Handler(BaseHTTPRequestHandler):
                 from ultimate_khorshid.core.settings import set_settings
                 from ultimate_khorshid.hotkey.manager import describe
                 allowed = {k: v for k, v in data.items()
-                           if k in ("hotkey", "hotkey_action", "engine", "model", "voice") and v}
-                s = set_settings(**allowed)
+                           if k in ("hotkey", "hotkey_action", "engine", "model", "voice") and isinstance(v, str)}
+                try:
+                    s = set_settings(**allowed)
+                except ValueError as exc:
+                    return self._send({"error": str(exc)}, 400)
                 s["hotkey_describe"] = describe(s["hotkey"])
                 return self._send({"ok": True, "settings": s})
             if self.path == "/api/browser":
@@ -297,6 +350,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(_run_quiz(data))
             if self.path == "/api/history/clear":
                 hist_clear()
+                from ultimate_khorshid.memory.automatic import AutomaticMemory
+                AutomaticMemory(load_config().storage.db_path).clear(session="local")
                 return self._send({"ok": True})
             if self.path == "/api/vision":
                 from ultimate_khorshid.tools.vision import VisionAskTool
@@ -312,6 +367,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(host: str = "127.0.0.1", port: int = 8899, open_browser: bool = False) -> None:
+    import ipaddress
+    try:
+        local = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        local = False
+    if not local:
+        raise ValueError("این API فقط محلی است؛ host باید localhost یا آدرس loopback باشد.")
     if open_browser:
         import threading
         import webbrowser
@@ -338,3 +400,4 @@ def create_fastapi_app():  # pragma: no cover
         return {"ok": True, **_run_query(str(body.get("query", "")), str(body.get("agent", "computer")))}
 
     return app
+

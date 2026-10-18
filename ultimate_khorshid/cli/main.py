@@ -33,7 +33,8 @@ def cmd_ask(args) -> int:
     from ultimate_khorshid.runtime import KhorshidRuntime
     cfg = load_config(args.config)
     rt = KhorshidRuntime(cfg, confirm_callback=None if args.yes else _confirm,
-                       interactive=False if args.yes else True)
+                       interactive=False if args.yes else True,
+                       allow_unconfirmed=args.yes)
     meta = {"resume_id": args.resume} if getattr(args, "resume", "") else None
     if getattr(args, "stream", False):
         r = rt.ask(args.query, agent=args.agent, stream=True, extra_meta=meta,
@@ -69,7 +70,8 @@ def cmd_tools(args) -> int:
         from ultimate_khorshid.core.types import ToolCall
         tools = [cls() for _, cls in ToolRegistry.items()]
         ex = ToolExecutor(tools, interactive=not args.yes,
-                          confirm_callback=None if args.yes else _confirm)
+                          confirm_callback=None if args.yes else _confirm,
+                          allow_unconfirmed=args.yes)
         try:
             params = json.loads(args.params or "{}")
         except Exception as e:
@@ -85,9 +87,26 @@ def cmd_tools(args) -> int:
 
 
 def cmd_memory(args) -> int:
+    from ultimate_khorshid.core.config import load_config
+    from ultimate_khorshid.memory.automatic import AutomaticMemory
     from ultimate_khorshid.memory.store import get_memory
-    mem = get_memory()
-    if args.add:
+    cfg = load_config(getattr(args, "config", None))
+    mem = get_memory(cfg.storage.db_path)
+    auto = AutomaticMemory(cfg.storage.db_path, cfg.agent.memory_retention)
+    if getattr(args, "forget_all", False):
+        if getattr(args, "yes", False) or _confirm("حذف همهٔ گفتگوها، اطلاعات و حافظهٔ محلی؟"):
+            auto.clear(everything=True)
+            print("حافظهٔ محلی پاک شد.")
+    elif getattr(args, "clear_conversation", False):
+        auto.clear(session="local")
+        print("سابقهٔ مکالمه پاک شد؛ اطلاعات کاربر و حافظهٔ دستی باقی ماند.")
+    elif getattr(args, "history", False):
+        for m in auto.recent("local", args.limit):
+            print(f"[{m['role']}] {m['content']}")
+    elif getattr(args, "facts", False):
+        for fact in auto.facts():
+            print(fact)
+    elif args.add:
         mid = mem.add(args.add, "cli")
         print(f"🧠 ذخیره شد (#{mid})")
     elif args.search:
@@ -96,16 +115,24 @@ def cmd_memory(args) -> int:
             print("چیزی پیدا نشد.")
         for h in hits:
             print(f"#{h.id} [{h.created}] {h.text[:250]}")
+        from ultimate_khorshid.memory.automatic import words
+        for fact in auto.facts():
+            if words(args.search) & words(fact):
+                print("[خودکار] " + fact)
+        for episode in auto.recall(args.search, args.limit):
+            print("[تجربه] " + json.dumps(episode, ensure_ascii=False))
     elif args.list:
         for h in mem.list_recent(args.limit):
             print(f"#{h.id} [{h.created}] {h.text[:200]}")
     elif args.ingest:
         from ultimate_khorshid.memory.ingest import ingest_directory, ingest_file
         p = os.path.expanduser(args.ingest)
-        n = ingest_directory(p) if os.path.isdir(p) else ingest_file(p)
+        n = ingest_directory(p, cfg.storage.db_path) if os.path.isdir(p) else ingest_file(p, cfg.storage.db_path)
         print(f"📚 {n} تکه ذخیره شد.")
     else:
         print(f"حافظه: {mem.count()} رکورد.")
+        print(json.dumps({"enabled": cfg.agent.context_from_memory,
+                          "automatic": cfg.agent.auto_memory, **auto.status()}, ensure_ascii=False))
     return 0
 
 
@@ -159,7 +186,7 @@ def cmd_schedule(args) -> int:
         return 0
     if args.run:
         rt = KhorshidRuntime(load_config())
-        sched = TaskScheduler(store, lambda prompt, agent: rt.ask(prompt, agent=agent).content)
+        sched = TaskScheduler(store, lambda prompt, agent: rt.ask(prompt, agent=agent, session_id="scheduler").content)
         print("⏰ زمان‌بند روشن شد (Ctrl+C برای توقف)...")
         sched.start()
         try:
@@ -221,7 +248,7 @@ def cmd_hotkey(args) -> int:
         return 0
     if args.status:
         st = daemon_status()
-        state = f"\U0001f7e2 روشن (pid={st['pid']})" if st["running"] else "\u26aa خاموش"
+        state = f"🟢 روشن (pid={st['pid']})" if st["running"] else "⚪ خاموش"
         print(f"دیمون پوش‌تو‌تاک: {state} | {st['describe']}")
         return 0
     if args.set:
@@ -265,6 +292,14 @@ def cmd_quiz(args) -> int:
 
 def cmd_doctor(_args) -> int:
     import platform
+    from pathlib import Path
+    from ultimate_khorshid.core.config import load_config
+    from ultimate_khorshid.cli.diagnostics import credentials, live_credentials, memory_status, ollama_status, personal_tts_status
+    try:
+        cfg = load_config(getattr(_args,'config',None))
+    except (OSError,ValueError,RuntimeError) as exc:
+        print(f'⚠️ خواندن تنظیمات doctor ناموفق بود ({type(exc).__name__})')
+        return 1
     print("🩺 Ultimate Khorshid Doctor\n")
     print(f"  پایتون: {platform.python_version()} | سیستم: {platform.system()} {platform.release()}")
     from ultimate_khorshid.runtime import list_agents, list_tools
@@ -276,17 +311,24 @@ def cmd_doctor(_args) -> int:
         n_skills = 0
     print(f"  نسخه: {__version__}")
     print(f"  ایجنت‌ها: {len(list_agents())} | ابزارها: {len(list_tools())} | مهارت‌ها: {n_skills}")
-    # موتورها
+    print('  بررسی کلیدها محلی است؛ وجود کلید به معنی تأیید اعتبار یا اتصال API نیست.')
+    # Use exactly the same provider configuration and credential lookup as runtime.
     try:
-        from ultimate_khorshid.engine.ollama import OllamaEngine
-        h = OllamaEngine().health()
-        print(f"  ollama: {'✅ ' + str(h.get('models', [])) if h['ok'] else '❌ ' + str(h.get('error', ''))[:80]}")
-    except Exception as e:
-        print(f"  ollama: ❌ {e}")
-    key = os.environ.get("OPENAI_API_KEY", "")
-    print(f"  openai_api_key: {'✅ تنظیم شده' if key else '⚪ تنظیم نشده (می‌توانی با mock/ollama کار کنی)'}")
-    gkey = os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", "")
-    print(f"  gemini_api_key: {'✅ تنظیم شده' if gkey else '⚪ تنظیم نشده (از aistudio.google.com بگیر)'}")
+        print('  ollama: '+ollama_status(cfg))
+    except Exception as exc:
+        print(f'  ollama: ⚠️ بررسی انجام نشد ({type(exc).__name__})')
+    try:
+        for name,present in credentials(cfg).items():
+            state='✅ تنظیم شده؛ اتصال آزمون نشد' if present else '⚪ تنظیم نشده؛ فقط برای استفاده از این سرویس لازم است'
+            print(f'  {name}_api_key: {state}')
+    except Exception as exc:
+        print(f'  api_keys: ⚠️ بررسی انجام نشد ({type(exc).__name__})')
+    try:
+        live_key=live_credentials(Path(__file__).resolve().parents[2])
+        state='✅ کلید موجود؛ اتصال آزمون نشد' if live_key else '⚪ کلید ذخیره‌شده پیدا نشد؛ ورودی موقت جلسهٔ باز قابل بررسی نیست'
+        print('  gemini_live: '+state)
+    except Exception as exc:
+        print(f'  gemini_live: ⚠️ بررسی انجام نشد ({type(exc).__name__})')
     tg = os.environ.get("KHORSHID_TELEGRAM_TOKEN", "")
     print(f"  telegram: {'✅ توکن تنظیم شده' if tg else '⚪ توکن تنظیم نشده (اختیاری — کنترل خورشید از موبایل)'}")
     try:
@@ -294,7 +336,8 @@ def cmd_doctor(_args) -> int:
         b = backends()
         rec = "✅" if (b["arecord"] or b["ffmpeg"] or b["sox"] or b["sounddevice"]) else "❌"
         play = "✅" if (b["aplay"] or b["afplay"] or b["ffmpeg"]) else "❌"
-        print(f"  voice: ضبط {rec} | پخش {play} | TTSآفلاین {'✅' if b['espeak'] else '⚪'}")
+        print(f"  ابزارهای voice: ضبط {rec} | پخش {play} | espeak {'✅' if b['espeak'] else '⚪'}؛ سخت‌افزار آزمون نشد")
+        print('  TTS شخصی: '+personal_tts_status(Path(__file__).resolve().parents[2]))
     except Exception:
         pass
     try:
@@ -302,9 +345,11 @@ def cmd_doctor(_args) -> int:
         has_pw = _iu.find_spec("playwright") is not None
         has_gui = _iu.find_spec("pyautogui") is not None or _iu.find_spec("mss") is not None
         print(f"  browser(playwright): {'✅ نصب است' if has_pw else '⚪ نصب نیست (playwright install chromium)'}")
-        print(f"  desktop(pyautogui/mss): {'✅ نصب است' if has_gui else '⚪ نصب نیست (pip install -e \".[desktop]\")'}")
+        desktop_state = '✅ نصب است' if has_gui else '⚪ نصب نیست (pip install -e ".[desktop]")'
+        print(f"  desktop(pyautogui/mss): {desktop_state}")
         has_hk = _iu.find_spec("pynput") is not None
-        print(f"  hotkey(pynput): {'✅ نصب است' if has_hk else '⚪ نصب نیست (pip install -e \".[hotkey]\")'}")
+        hotkey_state = '✅ نصب است' if has_hk else '⚪ نصب نیست (pip install -e ".[hotkey]")'
+        print(f"  hotkey(pynput): {hotkey_state}")
         try:
             from ultimate_khorshid.core.sandbox import detect_backend
             from ultimate_khorshid.core.vault import backend_name as _vb
@@ -312,16 +357,18 @@ def cmd_doctor(_args) -> int:
             print(f"  sandbox(اجرای کد): ⚙️ {detect_backend()}")
             print(f"  vault: {'✅ os-keyring' if _vb() == 'os-keyring' else '⚪ config-file (پیشنهاد: pip install keyring)'}")
             _stt = stt_backends()
+            provider_keys = credentials(cfg)
+            _stt['gemini'] = provider_keys['gemini']
+            _stt['groq'] = provider_keys['groq']
             print(f"  stt: {'✅ ' + ','.join(k for k, v in _stt.items() if v) if any(_stt.values()) else '❌ هیچ بک‌اندی'}")
         except Exception:
             pass
     except Exception:
         pass
     try:
-        from ultimate_khorshid.memory.store import get_memory
-        print(f"  حافظه: ✅ {get_memory().count()} رکورد")
-    except Exception as e:
-        print(f"  حافظه: ❌ {e}")
+        print('  حافظه: '+memory_status(cfg.storage.db_path))
+    except Exception as exc:
+        print(f'  حافظه: ⚠️ بررسی انجام نشد ({type(exc).__name__})')
     print("\n💡 شروع: khorshid chat   |   مثال: khorshid ask 'ساعت چند است؟'")
     return 0
 
@@ -499,6 +546,12 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--yes", "-y", action="store_true")
 
     c = sub.add_parser("memory", help="حافظه دائمی")
+    c.add_argument("--config", default=None)
+    c.add_argument("--history", action="store_true", help="گفتگوهای ذخیره‌شده")
+    c.add_argument("--facts", action="store_true", help="اطلاعات استخراج‌شده از گفتگو")
+    c.add_argument("--clear-conversation", action="store_true")
+    c.add_argument("--forget-all", action="store_true")
+    c.add_argument("--yes", action="store_true", help="تأیید حذف حافظه")
     c.add_argument("--add", default=None)
     c.add_argument("--search", default=None)
     c.add_argument("--list", action="store_true")
@@ -624,3 +677,4 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

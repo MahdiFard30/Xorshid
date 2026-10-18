@@ -7,8 +7,6 @@
 from __future__ import annotations
 
 import os
-import shutil
-import shlex
 import platform
 import subprocess
 import time
@@ -277,7 +275,7 @@ class OpenAppTool(BaseTool):
 
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec(name="open_app", description="اجرای/باز کردن یک برنامه یا فایل با برنامه پیش‌فرض.",
+        return ToolSpec(name="open_app", description="جست‌وجو و بازکردن برنامهٔ نصب‌شده با نام کامل، کوتاه یا شناسه. اگر app_not_found برگشت، با list_apps فهرست نصب‌ها را بررسی و نام فارسی/تلفظی را به شناسهٔ واقعی تطبیق بده؛ توقف نکن.",
             parameters={"type": "object", "properties": {"target": {"type": "string"}},
                         "required": ["target"]}, category="desktop")
 
@@ -290,21 +288,12 @@ class OpenAppTool(BaseTool):
             elif sys == "Windows":
                 os.startfile(t)  # type: ignore[attr-defined]
             else:
-                if not t:
-                    raise ValueError("نام برنامه یا مسیر خالی است.")
-                args = shlex.split(t)
-                executable = shutil.which(args[0]) if args else None
-                command = [executable, *args[1:]] if executable and not os.path.isfile(os.path.expanduser(t)) else ["xdg-open", os.path.expanduser(t)]
-                process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                try:
-                    rc = process.wait(timeout=0.4)
-                    if rc != 0:
-                        raise RuntimeError(f"برنامه با کد {rc} خارج شد")
-                except subprocess.TimeoutExpired:
-                    pass
+                from ultimate_khorshid.tools.app_launcher import launch
+                return ToolResult(tool_name="open_app", content=launch(t))
             return ToolResult(tool_name="open_app", content=f"🚀 درخواست اجرا ارسال شد: {t}")
         except Exception as e:
-            return ToolResult(tool_name="open_app", content=f"خطا: {e}", success=False)
+            return ToolResult(tool_name="open_app", content=f"خطا: {e}", success=False,
+                              metadata={'app_error': getattr(e, 'code', 'launch_failed')})
 
 
 @ToolRegistry.register("clipboard")
@@ -351,3 +340,30 @@ class DisplayInfoTool(BaseTool):
                               content=f"🖥️ صفحه: {w}×{h} | موس: ({x},{y})")
         except Exception as e:
             return ToolResult(tool_name="display_info", content=str(e), success=False)
+
+
+@ToolRegistry.register("list_apps")
+class ListAppsTool(BaseTool):
+    tool_id = "list_apps"
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(name="list_apps", description="جست‌وجوی برنامه‌های نصب‌شده با نام، نام محلی یا کلیدواژه. برای نام فارسی/تلفظیِ ناشناخته، query را خالی بگذار و نام‌ها را تطبیق بده؛ next_offset برای ادامهٔ فهرست است. شناسهٔ نتیجه را به open_app بده.",
+            parameters={"type": "object", "properties": {"query": {"type": "string"},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20}}}, category="desktop")
+
+    def execute(self, **p: Any) -> ToolResult:
+        try:
+            from ultimate_khorshid.tools.app_launcher import search_apps
+            offset, limit = max(0, int(p.get('offset', 0))), min(20, max(1, int(p.get('limit', 20))))
+            data = search_apps(str(p.get('query', '')), offset=offset, limit=limit)
+            apps = data['apps']
+            lines = [a["name"] + " — " + a["id"] for a in apps[:100]]
+            header = f"تعداد کل: {data['total']} | offset={offset} | next_offset={data['next_offset']}\n"
+            content = header + ("\n".join(lines) or "برنامه‌ای با این عبارت پیدا نشد.")
+            if data['next_offset'] is not None:
+                content += f"\nادامهٔ فهرست: offset={data['next_offset']} (تعداد کل: {data['total']})"
+            return ToolResult(tool_name="list_apps", content=content, metadata=data)
+        except Exception as e:
+            return ToolResult(tool_name="list_apps", content=str(e), success=False)

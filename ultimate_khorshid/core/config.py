@@ -10,11 +10,14 @@ from typing import Any, Dict, List, Optional
 try:
     import tomllib  # py3.11+
 except ImportError:  # pragma: no cover
-    tomllib = None  # type: ignore
+    try:
+        import tomli as tomllib  # Python 3.10 optional compatibility dependency
+    except ImportError:
+        tomllib = None  # type: ignore
 
 DEFAULT_CONFIG_PATHS = [
-    Path("configs/default.toml"),
     Path.home() / ".ultimate-jarvis" / "config.toml",
+    Path("configs/default.toml"),
     Path(__file__).resolve().parents[2] / "configs" / "default.toml",
 ]
 
@@ -37,6 +40,9 @@ class AgentSectionConfig:
     tools: str = "*"  # * = همه ابزارها
     objective: str = "به کاربر کمک کن؛ فارسی روان حرف بزن."
     context_from_memory: bool = True
+    auto_memory: bool = True
+    history_turns: int = 8
+    memory_retention: int = 1000
     persona: str = "khorshid"
     language: str = "fa"
 
@@ -51,6 +57,8 @@ class EngineSectionConfig:
     ollama_model: str = "llama3.1:8b"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
+    groq_api_key: str = ""
+    groq_model: str = "openai/gpt-oss-120b"
     gemini_tts_model: str = "gemini-2.5-flash-preview-tts"
     voice: str = "Kore"
 
@@ -97,24 +105,31 @@ def _merge_dataclass(dc: Any, data: Dict[str, Any]) -> Any:
 
 
 def load_config(path: Optional[str | Path] = None) -> KhorshidConfig:
-    """بارگذاری کانفیگ از TOML + override با ENV (KHORSHID_*)."""
+    """TOML < saved dashboard preferences < ENV; explicit files skip preferences.
+
+    Explicit file paths (including KHORSHID_CONFIG) never silently fall back.
+    A caller-supplied KhorshidConfig is already resolved and Runtime leaves it alone.
+    """
     cfg = KhorshidConfig()
     candidates: List[Path] = []
-    if path:
-        candidates.append(Path(path).expanduser())
+    explicit = path or os.environ.get("KHORSHID_CONFIG")
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
     else:
-        env_path = os.environ.get("KHORSHID_CONFIG")
-        if env_path:
-            candidates.append(Path(env_path).expanduser())
         candidates.extend(DEFAULT_CONFIG_PATHS)
     data: Dict[str, Any] = {}
     for c in candidates:
-        if c.exists() and tomllib is not None:
-            try:
-                data = tomllib.loads(c.read_text(encoding="utf-8"))
-                break
-            except Exception:
-                continue
+        if not c.exists():
+            if explicit:
+                raise FileNotFoundError(f"Config file not found: {c}")
+            continue
+        if tomllib is None:
+            raise RuntimeError("Python 3.10 needs tomli to read config: pip install -e .")
+        try:
+            data = tomllib.loads(c.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as exc:
+            raise ValueError(f"Cannot read config: {c} ({type(exc).__name__})") from None
+        break
     if data:
         cfg.raw = data
         if "intelligence" in data:
@@ -124,10 +139,12 @@ def load_config(path: Optional[str | Path] = None) -> KhorshidConfig:
         if "engine" in data:
             eng = dict(data["engine"])
             # تخت‌سازی زیربخش‌ها مثل [engine.ollama]
-            for sub in ("ollama", "openai", "openai_compat", "gemini"):
+            for sub in ("ollama", "openai", "openai_compat", "gemini", "groq"):
                 if sub in eng and isinstance(eng[sub], dict):
                     for k, v in eng[sub].items():
-                        if sub == "ollama" and k == "host":
+                        if sub == 'groq' and k in ('api_key', 'model'):
+                            setattr(cfg.engine, 'groq_' + k, v)
+                        elif sub == "ollama" and k == "host":
                             cfg.engine.ollama_host = v
                         elif sub == "ollama" and k == "model":
                             cfg.engine.ollama_model = v
@@ -159,13 +176,33 @@ def load_config(path: Optional[str | Path] = None) -> KhorshidConfig:
         if "server" in data:
             _merge_dataclass(cfg.server, data["server"])
 
-    # ENV overrides
+    if not explicit:
+        from ultimate_khorshid.core.settings import apply_to_config
+        apply_to_config(cfg)
+    apply_environment(cfg)
+    return cfg
+
+
+def select_engine(cfg: KhorshidConfig, engine: str) -> None:
+    """An engine-only choice also selects its configured provider model."""
+    engine = {"openai": "openai_compat", "google": "gemini"}.get(engine, engine)
+    models = {"mock": "mock/smart", "ollama": "ollama/" + cfg.engine.ollama_model,
+              "gemini": "gemini/" + cfg.engine.gemini_model,
+              "groq": "groq/" + cfg.engine.groq_model,
+              "openai_compat": "openai/" + cfg.engine.openai_model}
+    if engine not in models:
+        raise ValueError(f"Unsupported engine: {engine}")
+    cfg.engine.default = cfg.intelligence.preferred_engine = engine
+    cfg.intelligence.default_model = models[engine]
+
+
+def apply_environment(cfg: KhorshidConfig) -> None:
+    # ENV always has the final word, including saved dashboard preferences.
     e = os.environ.get
-    if e("KHORSHID_ENGINE"):
-        cfg.engine.default = e("KHORSHID_ENGINE", cfg.engine.default)
-        cfg.intelligence.preferred_engine = cfg.engine.default
-    if e("KHORSHID_MODEL"):
-        cfg.intelligence.default_model = e("KHORSHID_MODEL") or cfg.intelligence.default_model
+    if e('GROQ_API_KEY'):
+        cfg.engine.groq_api_key = e('GROQ_API_KEY')
+    if e('KHORSHID_GROQ_MODEL'):
+        cfg.engine.groq_model = e('KHORSHID_GROQ_MODEL')
     if e("OPENAI_API_KEY") and not cfg.engine.openai_api_key:
         cfg.engine.openai_api_key = e("OPENAI_API_KEY", "")
     gkey = e("GEMINI_API_KEY") or e("GOOGLE_API_KEY")
@@ -183,7 +220,13 @@ def load_config(path: Optional[str | Path] = None) -> KhorshidConfig:
         cfg.agent.default_agent = e("KHORSHID_AGENT") or cfg.agent.default_agent
     if e("KHORSHID_LANG"):
         cfg.agent.language = e("KHORSHID_LANG") or cfg.agent.language
-    return cfg
+    if e("KHORSHID_ENGINE"):
+        select_engine(cfg, e("KHORSHID_ENGINE", ""))
+    if e("KHORSHID_MODEL"):
+        cfg.intelligence.default_model = e("KHORSHID_MODEL", "")
+    from ultimate_khorshid.intelligence.catalog import resolve_model
+    actual = resolve_model(cfg.intelligence.default_model).engine
+    cfg.engine.default = cfg.intelligence.preferred_engine = actual
 
 
 def ensure_dirs(cfg: KhorshidConfig) -> Dict[str, Path]:
@@ -193,3 +236,4 @@ def ensure_dirs(cfg: KhorshidConfig) -> Dict[str, Path]:
     ws.mkdir(parents=True, exist_ok=True)
     Path(cfg.storage.db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
     return {"base": base, "workspace": ws}
+

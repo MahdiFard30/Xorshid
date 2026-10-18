@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from ultimate_khorshid.voice.output import speech_text
+
 from typing import Optional
 
 from ultimate_khorshid.voice import audio as A
@@ -17,7 +19,8 @@ def voice_chat(cfg=None, agent: Optional[str] = None, seconds: int = 6,
     from ultimate_khorshid.runtime import KhorshidRuntime
 
     cfg = cfg or load_config()
-    rt = KhorshidRuntime(cfg, interactive=False)
+    from ultimate_khorshid.core.approval import desktop_confirm
+    rt = KhorshidRuntime(cfg, confirm_callback=desktop_confirm)
     has_key = bool(E.api_key())
 
     print("🎙️  خورشید صوتی روشن شد!")
@@ -62,7 +65,7 @@ def voice_chat(cfg=None, agent: Optional[str] = None, seconds: int = 6,
             print(f"🤖 خورشید:\n{result.content}\n")
             if not no_tts:
                 try:
-                    E.speak_text(result.content, voice=voice)
+                    E.speak_text(speech_text(result), voice=voice)
                 except Exception as e:
                     print(f"   ⚠️ پخش صدا نشد: {e}")
             if once:

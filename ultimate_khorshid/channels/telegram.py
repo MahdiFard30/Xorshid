@@ -163,7 +163,7 @@ class TelegramBot:
             self._rt = KhorshidRuntime(load_config())
         return self._rt
 
-    def answer(self, text: str) -> str:
+    def answer(self, text: str, memory_scope: str | None = None) -> str:
         """جواب یک پیام متنی (دستور یا سؤال آزاد)."""
         cmd, _arg = parse_command(text)
         if cmd in ("start", "help"):
@@ -190,7 +190,8 @@ class TelegramBot:
         if cmd:
             return f"دستور /{cmd} را نمی‌شناسم قربان. /help را ببین. 🤔"
         try:
-            r = self._runtime().ask(text, agent=self.agent)
+            scope = memory_scope or ("telegram:" + self.token.split(":", 1)[0] + ":direct")
+            r = self._runtime().ask(text, agent=self.agent, session_id=scope, memory_scope=scope)
             return r.content[:10000] or "(پاسخ خالی)"
         except Exception as e:
             return f"❌ خطا: {e}"
@@ -202,7 +203,7 @@ class TelegramBot:
         if not got:
             return uid
         chat_id, text, name, username = got
-        msg = update.get("message") or {}
+        msg = update.get("message") or update.get("edited_message") or {}
         user_id = (msg.get("from") or {}).get("id")
         if not is_allowed(username, user_id, self.allow):
             print(f"⛔ پیام از کاربر غیرمجاز رد شد: {name} (@{username})")
@@ -210,7 +211,8 @@ class TelegramBot:
         print(f"📩 {name}: {text[:80]}")
         self.typing(chat_id)
         try:
-            self.send(chat_id, self.answer(text))
+            scope = f"telegram:{self.token.split(':', 1)[0]}:{chat_id}:{user_id}"
+            self.send(chat_id, self.answer(text, memory_scope=scope))
         except Exception as e:
             print(f"⚠️ {e}")
         return uid
@@ -265,3 +267,4 @@ def run_polling(token: str, agent: Optional[str] = None,
                 time.sleep(backoff)
     except KeyboardInterrupt:
         print("\n👋 ربات تلگرام خاموش شد.")
+

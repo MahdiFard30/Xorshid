@@ -12,6 +12,21 @@ from ultimate_khorshid.core.registry import EngineRegistry
 from ultimate_khorshid.engine.base import EngineConnectionError, InferenceEngine
 
 
+def _history_message(message):
+    out={"role":message.get("role"),"content":str(message.get("content", "") or "")}
+    if message.get("role")=="tool" and message.get("name"):
+        out["tool_name"]=message["name"]
+    if message.get("role")=="assistant" and message.get("tool_calls"):
+        calls=[]
+        for call in message["tool_calls"]:
+            fn=call.get("function",call)
+            arguments=fn.get("arguments",{})
+            if isinstance(arguments,str):arguments=json.loads(arguments)
+            calls.append({"function":{"name":fn.get("name", ""),"arguments":arguments}})
+        out["tool_calls"]=calls
+    return out
+
+
 @EngineRegistry.register("ollama")
 class OllamaEngine(InferenceEngine):
     engine_id = "ollama"
@@ -28,7 +43,7 @@ class OllamaEngine(InferenceEngine):
                  max_tokens=1024, stream=False, **kw) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": self._model(model),
-            "messages": [{"role": m.get("role"), "content": str(m.get("content", ""))} for m in messages],
+            "messages": [_history_message(m) for m in messages],
             "stream": stream,
             "options": {"temperature": temperature, "num_predict": max_tokens},
         }
@@ -114,7 +129,9 @@ class OllamaEngine(InferenceEngine):
                 models = [m.get("name") for m in data.get("models", [])]
                 return {"engine": "ollama", "ok": True, "models": models}
         except Exception as e:
-            return {"engine": "ollama", "ok": False, "error": str(e)[:200]}
+            reason = getattr(e, 'reason', e)
+            return {"engine": "ollama", "ok": False, "error": str(e)[:200],
+                    "errno": getattr(reason, 'errno', None)}
 
 
 def _apply_schema(res: Dict[str, Any], kw: Dict[str, Any]) -> Dict[str, Any]:

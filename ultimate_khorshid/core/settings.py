@@ -6,6 +6,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict
 
@@ -14,8 +17,19 @@ DEFAULTS: Dict[str, str] = {
     "hotkey_action": "voice",  # voice | dashboard
     "engine": "",
     "model": "",
-    "voice": "Kore",
+    "voice": "",  # Empty means inherit the resolved TOML/environment voice.
 }
+_write_lock = threading.RLock()
+
+
+def _stored() -> Dict[str, str]:
+    try:
+        data = json.loads(settings_path().read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        return {k: str(v) for k, v in data.items() if k in DEFAULTS and isinstance(v, str)}
+    except (OSError, ValueError):
+        return {}
 
 
 def settings_path() -> Path:
@@ -26,38 +40,51 @@ def settings_path() -> Path:
 
 def get_settings() -> Dict[str, str]:
     out = dict(DEFAULTS)
-    fp = settings_path()
-    if fp.exists():
-        try:
-            data = json.loads(fp.read_text(encoding="utf-8"))
-            for k in DEFAULTS:
-                if data.get(k):
-                    out[k] = str(data[k])
-        except Exception:
-            pass
+    out.update(_stored())
     return out
 
 
 def set_settings(**kw: Any) -> Dict[str, str]:
-    out = get_settings()
-    for k, v in kw.items():
-        if k in DEFAULTS and v:
-            out[k] = str(v)
-    settings_path().write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
-    return out
+    with _write_lock:
+        # Persist overrides, not UI defaults: absent voice must not mask TOML.
+        out = _stored()
+        for k, v in kw.items():
+            if k in DEFAULTS and v is not None:
+                value = str(v).strip()
+                out[k] = value if value or k in {"engine", "model", "voice"} else DEFAULTS[k]
+        if out.get("engine") and out["engine"] not in {"mock", "ollama", "gemini", "openai", "openai_compat"}:
+            raise ValueError("Unsupported engine")
+        if "engine" in kw and "model" not in kw:
+            out["model"] = ""  # Previous provider's model must not defeat a new engine choice.
+        if out.get("engine") and out.get("model"):
+            from ultimate_khorshid.intelligence.catalog import resolve_model
+            engine = {"openai": "openai_compat"}.get(out["engine"], out["engine"])
+            if resolve_model(out["model"]).engine != engine:
+                raise ValueError("مدل با موتور انتخاب‌شده هماهنگ نیست؛ مدل را اصلاح یا خالی کنید.")
+        fp = settings_path()
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=fp.parent, delete=False) as tmp:
+                temp_path = Path(tmp.name)
+                json.dump(out, tmp, ensure_ascii=False, indent=1)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(temp_path, fp)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+        return {**DEFAULTS, **out}
 
 
 def apply_to_config(cfg: Any) -> Any:
     """اورلی تنظیمات داشبورد روی کانفیگ (engine/model/voice)."""
-    s = get_settings()
-    try:
-        if s.get("engine"):
-            cfg.engine.default = s["engine"]
-            cfg.intelligence.preferred_engine = s["engine"]
-        if s.get("model"):
-            cfg.intelligence.default_model = s["model"]
-        if s.get("voice"):
-            cfg.engine.voice = s["voice"]
-    except Exception:
-        pass
+    s = _stored()
+    if s.get("engine") and not s.get("model"):
+        from ultimate_khorshid.core.config import select_engine
+        select_engine(cfg, s["engine"])
+    if s.get("model"):
+        cfg.intelligence.default_model = s["model"]
+    if s.get("voice"):
+        cfg.engine.voice = s["voice"]
     return cfg

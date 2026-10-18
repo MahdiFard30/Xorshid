@@ -1,0 +1,9 @@
+{
+  "protocol": 6,
+  "ea_version": "3.23",
+  "compile_result": "0 errors, 0 warnings",
+  "source_sha256": "e7d821d1510d6803a7f8b2162c897856591ab8235eda328f83fdaa03d711b8a9",
+  "binary_sha256": "d9320f57e949facac9569542f24fb6307b766aba7055c0c9943f09564d33a4c7",
+  "previous_source_sha256": "cbe33d16164424761f22d741caa56eeca08c76b8cf87ed7a1a450fa32dafa454",
+  "policy_sha256": "5c995e0c9913fc4cb632d2f209ca1807b90a80320449a6e1d14b043ca9853f9d"
+}

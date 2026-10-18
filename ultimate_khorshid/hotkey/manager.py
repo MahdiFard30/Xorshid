@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import os
 import threading
+from ultimate_khorshid.voice.output import speech_text
+
 from typing import Callable, FrozenSet, Optional, Tuple
 
 MODIFIERS = {"ctrl", "alt", "shift", "cmd", "win", "meta"}
@@ -93,6 +95,13 @@ class HotkeyManager:
         self._hold_timer: Optional[threading.Timer] = None
         self._max_timer: Optional[threading.Timer] = None
         self._listener = None
+        self._work_ready = threading.Condition(self._lock)
+        self._pending = None
+        self._worker = None
+        self._stopped = False
+        self._turn_controller = None
+        from ultimate_khorshid.hotkey.terminal import QuietTerminal
+        self._terminal = QuietTerminal()
 
     # ---------------------------------------------------------- اتصال pynput ---
     def _need_pynput(self):
@@ -123,11 +132,13 @@ class HotkeyManager:
             return ""
 
     def _on_press(self, key) -> None:
+        self._terminal.discard()
         name = self._norm(key)
         if name:
             self.press(name)
 
     def _on_release(self, key) -> None:
+        self._terminal.discard()
         name = self._norm(key)
         if name:
             self.release(name)
@@ -136,6 +147,8 @@ class HotkeyManager:
     def press(self, name: str) -> None:
         """فشرده شدن یک کلید (نام نرمال‌شده مثل 'ctrl' یا 'j')."""
         with self._lock:
+            if self._stopped:
+                return
             if name in self._pressed:
                 return  # تکرار خودکار را نادیده بگیر
             self._pressed.add(name)
@@ -199,10 +212,16 @@ class HotkeyManager:
     # -------------------------------------------------------------- ضبط ---
     def _arm(self) -> None:
         """آستانه رد شد: ضبط را شروع کن (فقط اکشن voice)."""
+        if self._stopped:
+            return
         self._cancel_hold_timer()
         self._armed = True
         if self.action != "voice":
             return
+        from ultimate_khorshid.core.control import RunController
+        if self._turn_controller is not None:
+            self._turn_controller.cancel('New push-to-talk recording')
+        self._turn_controller = RunController()
         if not self._start_capture():
             self._armed = False
             return
@@ -222,20 +241,16 @@ class HotkeyManager:
         except Exception as e:
             print(f"❌ ضبط شروع نشد: {e}")
             self._rec_proc = None
+            self._cleanup_wav(self._rec_path)
+            self._rec_path = ''
             return False
         print("🎤 ضبط... حرف بزن! (ول کن تا اجرا شود)")
         _beep(start=True)
         return True
 
-    def _capture_transcript(self) -> str:
-        """توقف ضبط + رونویسی. قابل monkeypatch در تست."""
-        from ultimate_khorshid.voice import audio as A
+    def _capture_transcript(self, path: str) -> str:
+        """رونویسی فایل ضبط‌شده؛ فقط در پردازش پس‌زمینه فراخوانی می‌شود."""
         from ultimate_khorshid.voice.engines import transcribe_file
-        proc, path = self._rec_proc, self._rec_path
-        self._rec_proc = None
-        if proc is None:
-            return ""
-        A.stop_recording(proc)
         _beep(start=False)
         try:
             size = os.path.getsize(path)
@@ -247,7 +262,7 @@ class HotkeyManager:
             return ""
         print("🧠 در حال فهمیدن...")
         try:
-            return transcribe_file(path)
+            return transcribe_file(path, engine="gemini")
         finally:
             self._cleanup_wav(path)
 
@@ -266,37 +281,89 @@ class HotkeyManager:
         if self.action == "dashboard":
             action_open_dashboard()
             return
+        # Detach before returning to the keyboard listener: a new capture must
+        # never overwrite the process/path belonging to an older recording.
+        capture = self._rec_proc, self._rec_path
+        self._rec_proc, self._rec_path = None, ''
+        controller = self._turn_controller
+        threading.Thread(target=self._finish_capture, args=(capture, controller),
+                         name='khorshid-stop-capture', daemon=True).start()
+
+    def _finish_capture(self, capture, controller):
+        """Stop the recorder promptly even when the response worker is busy."""
+        proc, path = capture
         try:
-            query = self._capture_transcript()
-        except Exception as e:
-            print(f"❌ {e}")
-            return
-        if not query.strip():
-            return
-        print(f"👤 {query}")
-        if self.on_text is not None:
+            if proc is not None:
+                from ultimate_khorshid.voice import audio as A
+                A.stop_recording(proc)
+            with self._work_ready:
+                if self._stopped or controller is None or controller.is_cancelled:
+                    self._cleanup_wav(path)
+                    return
+                if self._pending is not None:
+                    self._cleanup_wav(self._pending[0])
+                self._pending = path, controller
+                if self._worker is None or not self._worker.is_alive():
+                    self._worker = threading.Thread(target=self._process_pending,
+                                                    name='khorshid-voice-turns', daemon=True)
+                    self._worker.start()
+                self._work_ready.notify()
+        except Exception as exc:
+            self._cleanup_wav(path)
+            print(f'❌ توقف ضبط ناموفق بود: {exc}')
+
+    def _process_pending(self):
+        """Serialize turns; keep only the newest pending recording."""
+        from ultimate_khorshid.core.control import CancelledError, use_controller
+        while True:
+            with self._work_ready:
+                self._work_ready.wait_for(lambda: self._stopped or self._pending is not None)
+                if self._stopped:
+                    return
+                path, controller = self._pending
+                self._pending = None
             try:
-                self.on_text(query)
-            except Exception as e:
-                print(f"⚠️ خطای اکشن هات‌کی: {e}")
-            return
-        self.run_voice_pipeline(query)
+                with use_controller(controller):
+                    controller.check()
+                    query = self._capture_transcript(path)
+                    controller.check()
+                    if not query.strip():
+                        continue
+                    print(f'👤 {query}')
+                    if self.on_text is not None:
+                        self.on_text(query)
+                    else:
+                        self.run_voice_pipeline(query)
+            except CancelledError:
+                pass
+            except Exception as exc:
+                print(f'⚠️ خطای پردازش صوت: {exc}')
+            finally:
+                self._cleanup_wav(path)
 
     def _abort(self, silent: bool = False) -> None:
         self._cancel_hold_timer()
         self._cancel_max_timer()
         if self._rec_proc is not None:
-            try:
-                from ultimate_khorshid.voice import audio as A
-                A.stop_recording(self._rec_proc)
-            except Exception:
-                pass
-            self._rec_proc = None
-            self._cleanup_wav(self._rec_path)
-            self._rec_path = ""
+            capture = self._rec_proc, self._rec_path
+            self._rec_proc, self._rec_path = None, ''
+            if self._turn_controller is not None:
+                self._turn_controller.cancel('Recording discarded')
+            threading.Thread(target=self._discard_capture, args=(capture,),
+                             name='khorshid-discard-capture', daemon=True).start()
             if not silent:
                 print("🚫 لغو شد (شرتکات صفحه‌کلید).")
         self._armed = False
+
+    def _discard_capture(self, capture):
+        proc, path = capture
+        try:
+            from ultimate_khorshid.voice import audio as A
+            A.stop_recording(proc)
+        except Exception as exc:
+            print(f'⚠️ توقف ضبط لغوشده ناموفق بود: {exc}')
+        finally:
+            self._cleanup_wav(path)
 
     def _cancel_hold_timer(self) -> None:
         try:
@@ -318,44 +385,86 @@ class HotkeyManager:
     def run_voice_pipeline(self, query: str) -> None:
         """اجرای دستور صوتی + جواب: انجام بده → بگو."""
         from ultimate_khorshid.runtime import KhorshidRuntime
+        from ultimate_khorshid.core.control import CancelledError, check_cancelled
         print("⚙️ در حال انجام کار...")
         try:
-            result = KhorshidRuntime().ask(query, agent=self.agent)
+            from ultimate_khorshid.core.approval import desktop_confirm
+            check_cancelled()
+            rt = KhorshidRuntime(confirm_callback=desktop_confirm)
+            try:
+                result = rt.ask(query, agent=self.agent)
+            finally:
+                rt.executor.shutdown()
+        except CancelledError:
+            return
         except Exception as e:
             print(f"❌ خطای ایجنت: {e}")
+            return
+        check_cancelled()
+        if result.metadata.get('cancelled'):
             return
         print(f"🤖 {result.content}")
         if self.no_tts:
             return
         try:
             from ultimate_khorshid.voice import engines as E
-            E.speak_text(result.content, voice=self.voice)
+            E.speak_text(speech_text(result), voice=self.voice)
+        except CancelledError:
+            return
         except Exception as e:
             print(f"⚠️ پخش صدا نشد: {e}")
 
     # -------------------------------------------------------------- اجرا ---
     def start_background(self):
         keyboard = self._need_pynput()
-        self._listener = keyboard.Listener(on_press=self._on_press,
-                                           on_release=self._on_release, daemon=True)
-        self._listener.start()
+        self._terminal.start()
+        try:
+            self._listener = keyboard.Listener(on_press=self._on_press,
+                                               on_release=self._on_release, daemon=True)
+            self._listener.start()
+        except BaseException:
+            self._terminal.close()
+            raise
         print(f"⌨️ {describe(self.combination)} — برای توقف Ctrl+C")
         return self._listener
 
     def start_blocking(self) -> None:
+        import signal
         keyboard = self._need_pynput()
-        print(f"⌨️ {describe(self.combination)} — برای توقف Ctrl+C")
-        print("   (ضربه سریع یا Ctrl+C/V ضبط را روشن نمی‌کند — باید نگه داری)")
-        with keyboard.Listener(on_press=self._on_press, on_release=self._on_release) as lst:
-            lst.join()
+        old_term = None
+        # A normal SIGTERM must also restore the foreground terminal.
+        manage_term = threading.current_thread() is threading.main_thread()
+        if manage_term:
+            old_term = signal.getsignal(signal.SIGTERM)
+            def terminate(signum, frame):
+                raise SystemExit(128 + signum)
+            signal.signal(signal.SIGTERM, terminate)
+        self._terminal.start()
+        try:
+            print(f"⌨️ {describe(self.combination)} — برای توقف Ctrl+C")
+            with keyboard.Listener(on_press=self._on_press, on_release=self._on_release) as lst:
+                self._listener = lst
+                lst.join()
+        finally:
+            self.stop()
+            if manage_term:
+                signal.signal(signal.SIGTERM, old_term)
 
     def stop(self) -> None:
-        self._abort(silent=True)
         try:
+            with self._work_ready:
+                self._stopped = True
+                if self._turn_controller is not None:
+                    self._turn_controller.cancel('Hotkey stopped')
+                if self._pending is not None:
+                    self._cleanup_wav(self._pending[0])
+                    self._pending = None
+                self._abort(silent=True)
+                self._work_ready.notify_all()
             if self._listener:
                 self._listener.stop()
-        except Exception:
-            pass
+        finally:
+            self._terminal.close()
 
 
 # ---------------------------------------------------------------- اکشن‌ها ---
@@ -506,8 +615,10 @@ def push_to_talk_once(combination: str = "ctrl", hold: float = 0.25,
                         hold_threshold=hold, max_record=max_record)
     mgr.start_background()
     print("🎧 یک بار امتحان کن: کلید را نگه دار، حرف بزن، ول کن...")
-    ok = done.wait(timeout)
-    mgr.stop()
+    try:
+        ok = done.wait(timeout)
+    finally:
+        mgr.stop()
     if not ok:
         print("⏱ وقتی تمام شد و چیزی گفته نشد.")
         return ""

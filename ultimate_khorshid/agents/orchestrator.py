@@ -19,11 +19,13 @@ class OrchestratorAgent(ToolUsingAgent):
         tools = self._openai_tools(ctx.tools)
         results: List[ToolResult] = []
         turns = 0
+        last_provider = {}
 
         for _ in range(self._max_turns):
             turns += 1
             self._emit("turn_start", turn=turns)
             res = self._generate(messages, tools=tools or None)
+            last_provider = self._response_provider(res)
             calls = res.get("tool_calls", []) or []
             content = self._strip_think(res.get("content", "") or "")
 
@@ -32,7 +34,7 @@ class OrchestratorAgent(ToolUsingAgent):
                 self._emit("turn_end", turn=turns)
                 self._emit("agent_end", turns=turns)
                 return AgentResult(content=content or "(پاسخ خالی)", tool_results=results,
-                                   turns=turns, metadata={"model": self._model})
+                                   turns=turns, metadata=self._response_provider(res))
 
             messages.append({"role": "assistant", "content": content,
                              "tool_calls": [{"id": c.get("id", f"c{i}"),
@@ -55,11 +57,12 @@ class OrchestratorAgent(ToolUsingAgent):
         # جمع‌بندی نهایی
         try:
             fin = self._generate(messages + [{"role": "user", "content": "با توجه به نتایج ابزارها، پاسخ نهایی فارسی و خلاصه بده."}])
+            last_provider = self._response_provider(fin)
             content = self._strip_think(fin.get("content", ""))
         except Exception:
             content = "به سقف گام‌ها رسیدم."
         return AgentResult(content=content, tool_results=results, turns=turns,
-                           metadata={"max_turns_exceeded": True})
+                           metadata={**last_provider, "max_turns_exceeded": True})
 
     def _openai_tools(self, wanted: List[str]) -> List[Dict[str, Any]]:
         if self._executor is None:

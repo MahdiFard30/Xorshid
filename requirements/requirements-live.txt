@@ -1,0 +1,4 @@
+-r requirements-sun.txt
+pynput>=1.7
+google-genai>=2.31,<3
+python-dotenv>=1,<2

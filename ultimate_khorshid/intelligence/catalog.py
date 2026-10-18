@@ -50,6 +50,8 @@ _register_builtins()
 
 
 def resolve_model(model_id: str) -> ModelSpec:
+    if model_id.startswith('groq/'):
+        return ModelSpec(id=model_id, engine='groq', supports_tools=True, local=False)
     if ModelRegistry.contains(model_id):
         return ModelRegistry.get(model_id)
     # حدس موتور از روی پیشوند

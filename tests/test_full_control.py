@@ -53,10 +53,14 @@ def test_dashboard_exists():
         assert marker in html, marker
 
 
-def test_server_api():
+def test_server_api(tmp_path, monkeypatch):
     import threading
     from http.server import ThreadingHTTPServer
     from ultimate_khorshid.server.app import Handler
+    from ultimate_khorshid.core.config import KhorshidConfig
+    cfg = KhorshidConfig()
+    cfg.storage.db_path = str(tmp_path / "api-memory.db")
+    monkeypatch.setattr("ultimate_khorshid.server.app.load_config", lambda: cfg)
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     port = srv.server_address[1]
     t = threading.Thread(target=srv.serve_forever, daemon=True)

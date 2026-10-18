@@ -117,5 +117,12 @@ class SQLiteMemory:
         return n
 
 
-def get_memory(db_path: str = "~/.ultimate-jarvis/memory.db") -> SQLiteMemory:
+def get_memory(db_path: str | None = None) -> SQLiteMemory:
+    if db_path is None:
+        from ultimate_khorshid.memory.automatic import _database
+        db_path = _database.get()
+        if db_path is None:
+            from ultimate_khorshid.core.config import load_config
+            db_path = load_config().storage.db_path
     return MemoryRegistry.create("sqlite", db_path=db_path)
+

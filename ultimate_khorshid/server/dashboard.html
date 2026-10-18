@@ -146,7 +146,7 @@ font-size:13px;box-shadow:0 4px 20px #000a;animation:tin .3s;max-width:360px}
       <label>مدل (مثل gemini/gemini-2.0-flash)</label>
       <div class="row"><input id="set-model" dir="ltr" placeholder="خالی = پیش‌فرض"></div>
       <label>صدای خورشید</label>
-      <div class="row"><select id="set-voice"><option>Kore</option><option>Charon</option><option>Fenrir</option><option>Aoede</option><option>Puck</option></select>
+      <div class="row"><select id="set-voice"><option value="">پیش‌فرض</option><option>Kore</option><option>Charon</option><option>Fenrir</option><option>Aoede</option><option>Puck</option></select>
       <button class="btn mini" onclick="saveSettings()">💾 ذخیره</button></div>
       <div class="hint">💡 هات‌کی با دستور <code>khorshid hotkey --daemon</code> روی سیستمت روشن می‌ماند.</div>
     </div>
@@ -228,7 +228,7 @@ async function send(text){text=(text??$('#input').value).trim();if(!text)return;
   addMsg('user',esc(text));typing(true);
   try{const d=await api('/api/chat',{method:'POST',body:JSON.stringify({message:text,agent:$('#agent').value})});
     typing(false);
-    if(d.ok){addMsg('bot',md(d.reply));if(d.tools&&d.tools.length)addTrace(d.tools);speakIfOn(d.reply);loadHistory();}
+    if(d.ok){addMsg('bot',md(d.reply));if(d.metadata&&d.metadata.engine){$('#p-engine').textContent='⚡ پاسخ: '+d.metadata.engine;$('#p-model').textContent='🧠 '+d.metadata.model;}if(d.tools&&d.tools.length)addTrace(d.tools);speakIfOn(d.reply);loadHistory();}
     else addMsg('bot','❌ خطا: '+esc(d.error||'?'));
   }catch(e){typing(false);addMsg('bot','❌ ارتباط با سرور قطع شد.');}}
 $('#send').onclick=()=>send();$('#input').onkeydown=e=>{if(e.key==='Enter')send();};
@@ -238,7 +238,7 @@ api('/api/agents').then(d=>{const fa={computer:'🖥️ کامپیوتر',orches
   $('#agent').innerHTML=(d.agents||['computer']).map(a=>'<option value="'+a+'"'+(a==='computer'?' selected':'')+'>'+(fa[a]||a)+'</option>').join('');});
 ['تتر چنده؟','ساعت چنده؟','برو توی گوگل سرچ کن تتر چنده','از صفحه اسکرین‌شات بگیر','سوال‌های این صفحه را جواب بده'].forEach(c=>{
   const b=document.createElement('button');b.className='chip';b.textContent=c;b.onclick=()=>send(c);$('#chips').append(b);});
-function refreshStatus(){api('/api/status').then(s=>{$('#p-engine').textContent='⚡ '+s.engine;$('#p-model').textContent='🧠 '+s.model;$('#p-tools').textContent='🔧 '+s.tools+' ابزار';});}
+function refreshStatus(){api('/api/status').then(s=>{$('#p-engine').textContent='⚙️ پیش‌فرض: '+s.engine;$('#p-model').textContent='🧠 '+s.model;$('#p-tools').textContent='🔧 '+s.tools+' ابزار';});}
 refreshStatus();
 function tick(){const d=new Date();try{$('#clock-fa').textContent=new Intl.DateTimeFormat('fa-IR',{dateStyle:'full',timeStyle:'short'}).format(d);
   $('#clock-en').textContent=new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(d);}catch(e){$('#clock-fa').textContent=d.toLocaleString();}}
@@ -259,14 +259,15 @@ function askShot(){send('از صفحه اسکرین‌شات بگیر و بعد 
 // تنظیمات
 async function loadSettings(){try{const d=await api('/api/settings');const s=d.settings||{};
   $('#set-hotkey').value=s.hotkey||'ctrl';$('#set-hk-desc').textContent=s.hotkey_describe||'';
-  $('#set-engine').value=s.engine||'';$('#set-model').value=s.model||'';$('#set-voice').value=s.voice||'Kore';
+  $('#set-engine').value=s.engine||'';$('#set-model').value=s.model||'';$('#set-voice').value=s.voice||'';
   $('#set-action').value=s.hotkey_action||'voice';$('#p-hotkey').textContent='⌨️ '+(s.hotkey||'ctrl');}catch(e){}}
 async function saveSettings(){try{const d=await api('/api/settings',{method:'POST',body:JSON.stringify({
   hotkey:$('#set-hotkey').value,hotkey_action:$('#set-action').value,engine:$('#set-engine').value,
   model:$('#set-model').value,voice:$('#set-voice').value})});
   if(d.ok){$('#set-hk-desc').textContent=d.settings.hotkey_describe;$('#p-hotkey').textContent='⌨️ '+d.settings.hotkey;
-    toast('⚙️ ذخیره شد');refreshStatus();}else toast('❌ خطا');}catch(e){toast('❌ ارتباط قطع شد');}}
+    toast('⚙️ ذخیره شد');refreshStatus();}else toast('❌ '+(d.error||'خطا'));}catch(e){toast('❌ ارتباط قطع شد');}}
 loadSettings();
+$('#set-engine').onchange=()=>{$('#set-model').value='';};
 // مرورگر
 async function bOp(op,extra){extra=extra||{};$('#b-result').textContent='⏳ ...';
   try{const d=await api('/api/browser',{method:'POST',body:JSON.stringify(Object.assign({op},extra))});

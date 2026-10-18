@@ -234,8 +234,9 @@ def convert_tool(openai_tool: Dict[str, Any]) -> Dict[str, Any]:
 def parse_response(data: Dict[str, Any]) -> Dict[str, Any]:
     cands = data.get("candidates") or []
     if not cands:
-        fb = json.dumps(data.get("promptFeedback", {}), ensure_ascii=False)[:300]
-        raise EngineConnectionError(f"Gemini پاسخی نداد (بلاک شد؟): {fb}")
+        if (data.get('promptFeedback') or {}).get('blockReason'):
+            raise EngineConnectionError('Gemini blocked by policy')
+        raise EngineConnectionError('Gemini empty response')
     parts = (cands[0].get("content") or {}).get("parts") or []
     texts: List[str] = []
     calls: List[Dict[str, Any]] = []
