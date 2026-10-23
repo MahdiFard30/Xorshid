@@ -15,7 +15,8 @@ def select(symbol):
 
 def compact(r):
     keys=('symbol','status','runner_alive','fresh_snapshot','error','last_reason',
-          'max_positions','entry_risk_pct','symbol_risk_cap_pct','selected','robot_open_positions','robot_realized_net','execution_ack','summary')
+          'max_positions','entry_risk_pct','symbol_risk_cap_pct','selected','robot_open_positions','robot_realized_net','execution_ack','execution_policy','research','summary',
+          'trading_controls','trading_controls_revision','native_controls','controls_match','experiment_id','profit_exit_mode')
     return {k:r[k] for k in keys if k in r}
 
 def reports(full=False):
@@ -45,6 +46,9 @@ def old_runner_active():
     return False
 
 def preflight():
+    from ultimate_khorshid.tools.execution_policy import load
+    if load(worker.ROOT).get('enabled') is not True:
+        raise ValueError('ارسال سفارش برای ممیزی غیرفعال است؛ ابتدا اعتبارسنجی مستقل و بازبینی لازم است.')
     if old_runner_active(): raise ValueError('Stop the old mt5_demo runner first.')
     select(SYMBOLS[0])
     legacy=worker.files().parent.parent/'khorshid_demo_snapshot.json'
@@ -54,6 +58,9 @@ def preflight():
     for symbol in SYMBOLS:
         select(symbol)
         s=worker.snapshot()
+        worker.execution_guard(worker.ROOT,s)
+        if s.get('executor_version')!=9 or s.get('exit_policy_version')!=worker.POLICY_VERSION:
+            raise ValueError(symbol+': نسخهٔ اکسپرت و کارگر هماهنگ نیست؛ اکسپرت ۳٫۵۰ لازم است')
         if not s['algo_enabled'] or s['halted']:
             raise ValueError(symbol+': Algo Trading disabled or risk limit reached')
         if s['blocking_positions'] or s['total_orders']:

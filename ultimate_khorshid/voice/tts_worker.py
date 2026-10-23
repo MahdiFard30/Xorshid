@@ -1,13 +1,14 @@
 """Private stdio worker: keep the original voice and models resident across replies."""
 import contextlib
 import copy
+from functools import lru_cache
 import json
 import logging
 import os
 from pathlib import Path
 import sys
 import time
-from ultimate_khorshid.voice.audio import speech_pause
+from ultimate_khorshid.voice.audio import speech_pause, speech_tempo
 
 ROOT = Path(__file__).resolve().parents[2]
 PROTOCOL = sys.stdout
@@ -49,11 +50,12 @@ class Synthesizer:
         from transformers import AutoTokenizer, T5ForConditionalGeneration
         from pocket_tts import TTSModel
         from ultimate_khorshid.voice.normalize_fa import normalize_for_model
-        from ultimate_khorshid.voice.tts_text import sentence_pieces, phoneme_pieces, prepare_spoken_text
+        from ultimate_khorshid.voice.tts_text import sentence_pieces, phoneme_pieces, prepare_spoken_text, reading_phrases
         self.np, self.torch, self.sf = np, torch, sf
         self.normalize = normalize_for_model
         self.sentences, self.phoneme_chunks = sentence_pieces, phoneme_pieces
         self.prepare_text = prepare_spoken_text
+        self.reading_phrases = reading_phrases
         self.voice_path = ROOT / 'ultimate_khorshid/assets/my_voice_prompt.wav'
         voice, sr = sf.read(self.voice_path, dtype='float32', always_2d=True)
         if len(voice) < sr * .5 or np.max(np.abs(voice)) < .001:
@@ -94,6 +96,25 @@ class Synthesizer:
     def count(self,s):
         return len(self.sp.encode(s,out_type=int))
 
+    @lru_cache(maxsize=128)
+    def phonemize(self, phrase):
+        """Reuse pronunciation, while generating fresh speech for each reply."""
+        encoded=self.tokenizer([phrase.replace('؟','').replace('?','')],add_special_tokens=False,return_tensors='pt')
+        encoded={k:v.to(self.device) for k,v in encoded.items()}
+        with self.torch.no_grad():
+            ids=self.g2p.generate(**encoded,num_beams=5,max_length=512,early_stopping=True)
+        if self.tokenizer.eos_token_id not in ids[0].tolist():
+            raise RuntimeError('G2P did not finish; refusing a truncated sentence')
+        return self.tokenizer.batch_decode(ids,skip_special_tokens=True)[0].strip().translate(self.mapping)
+
+    def warmup(self):
+        """Pay first-inference setup before reporting ready; never play it."""
+        phonemes=self.phonemize(self.normalize('سلام'))
+        with self.torch.no_grad():
+            self.model.generate_audio(self.clone_state(self.state),phonemes.replace('1',''))
+        if self.device=='cuda':
+            self.torch.cuda.synchronize()
+
     def synthesize(self,request):
         np,torch,sf=self.np,self.torch,self.sf
         started=time.monotonic()
@@ -122,28 +143,22 @@ class Synthesizer:
             prepared = self.prepare_text(text)
             report['prepared_text'] = prepared
             sentences=[]
-            for raw_phrase,pause in self.sentences(prepared):
+            for raw_phrase,pause,verse in self.reading_phrases(prepared,request.get('delivery','auto')):
                 normalized=self.normalize(raw_phrase)
                 # Number expansion can make a short input much longer. Bound
                 # G2P input after normalization too, keeping its final pause.
                 pieces=self.sentences(normalized)
-                sentences.extend((part, pause if i==len(pieces)-1 else .08)
+                sentences.extend((part, pause if i==len(pieces)-1 else .08, verse)
                                  for i,(part,_) in enumerate(pieces))
-            report['normalized_text']='\n'.join(phrase for phrase,_ in sentences)
-            report['phrase_boundaries']=[{'text':phrase,'pause':pause} for phrase,pause in sentences]
+            report['normalized_text']='\n'.join(phrase for phrase,_,_ in sentences)
+            report['phrase_boundaries']=[{'text':phrase,'pause':pause,'verse':verse} for phrase,pause,verse in sentences]
             if not sentences:raise RuntimeError('No pronounceable text')
             # Work sentence by sentence: no waiting for the entire G2P paragraph.
             index=0
-            for phrase_index,(phrase,pause) in enumerate(sentences):
+            for phrase_index,(phrase,pause,verse) in enumerate(sentences):
                 check_cancelled()
-                encoded=self.tokenizer([phrase.replace('؟','').replace('?','')],add_special_tokens=False,return_tensors='pt')
-                encoded={k:v.to(self.device) for k,v in encoded.items()}
-                with torch.no_grad():
-                    ids=self.g2p.generate(**encoded,num_beams=5,max_length=512,early_stopping=True)
+                phonemes=self.phonemize(phrase)
                 check_cancelled()
-                if self.tokenizer.eos_token_id not in ids[0].tolist():
-                    raise RuntimeError('G2P did not finish; refusing a truncated sentence')
-                phonemes=self.tokenizer.batch_decode(ids,skip_special_tokens=True)[0].strip().translate(self.mapping)
                 parts=self.phoneme_chunks(phonemes,self.count)
                 if not parts:raise RuntimeError('Empty pronunciation')
                 for part_index,part in enumerate(parts):
@@ -165,6 +180,13 @@ class Synthesizer:
                     chunk_report={'source':phrase,'phonemes':part,'tokens':self.count(part),'attempts':attempts}
                     report['chunks'].append(chunk_report)
                     if pcm is None:raise RuntimeError(f'Voice chunk {index} failed duration/silence checks')
+                    tempo=.94 if verse else 1.
+                    if verse:
+                        pcm,adjusted=speech_tempo(pcm,self.rate,tempo)
+                        check_cancelled()
+                    else:
+                        adjusted=False
+                    chunk_report.update(verse=verse,tempo=tempo if adjusted else 1.,tempo_applied=adjusted)
                     last=(phrase_index==len(sentences)-1 and part_index==len(parts)-1)
                     silence=0 if last else (pause if part_index==len(parts)-1 else .04)
                     pcm,added=speech_pause(pcm,self.rate,silence)
@@ -193,6 +215,7 @@ def main():
     with contextlib.redirect_stdout(sys.stderr):
         try:
             synth=Synthesizer()
+            synth.warmup()
         except Exception as exc:
             emit(type='fatal',error=str(exc));return 1
         emit(type='ready',device=synth.device)

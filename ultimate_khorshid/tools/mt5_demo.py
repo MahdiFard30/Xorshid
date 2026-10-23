@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SYMBOLS = ('XAUUSD', 'EURUSD', 'USDJPY')
 NAMES = {'XAUUSD': 'طلا', 'EURUSD': 'یورو به دلار', 'USDJPY': 'دلار به ین'}
 STATES = {
+    'waiting_for_trend_confirmation': 'منتظر تأیید روند برای سیگنال تازه',
+    'research_only': 'ارسال سفارش غیرفعال؛ فقط پژوهش',
     'screening': 'در حال بررسی استراتژی‌ها',
     'waiting_for_entry_signal': 'منتظر سیگنال ورود',
     'waiting_for_next_bar': 'منتظر کندل جدید',

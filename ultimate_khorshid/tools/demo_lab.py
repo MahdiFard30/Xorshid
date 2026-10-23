@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+from ultimate_khorshid.tools.exit_rules import STOP_ATR
 from statistics import mean, pstdev
 
 FID='https://www.fidelity.com/learning-center/trading-investing/technical-analysis/technical-indicator-guide/'
@@ -17,10 +18,10 @@ CATALOG=[
  ('cci','CCI 20 return through -100/+100',FID+'cci'),
  ('trend_pullback','EMA 50 trend plus RSI 14 pullback','https://www.fidelity.com/quick-content/etf/help/research/learn_er_glossary_3.shtml')]
 # Indicator sources are educational; the precise combined rules/risk settings are our test hypotheses.
-VERSION='demo-lab-1.0'
-RULES={'stop_atr':2.0,'take_profit_atr':3.0,'max_hold_bars':24,'risk_fraction':0.0025,
-       'entry':'next bar open after closed-bar signal','exit':'SL, TP, opposite signal or 24 bars',
-       'ambiguous_bar':'stop before target','splits':'60% train, 20% validation, 20% holdout',
+VERSION='demo-lab-2.0'
+RULES={'exit_policy_version':2,'stop_atr':1.0,'quick_target_r':1.0,'staged_targets_r':[1.0,2.0],'max_hold_bars':24,'risk_fraction':0.0025,
+       'entry':'next bar open after closed-bar signal','exit':'current policy: SL, profile TP, partial/trailing, failed thesis, opposite signal or 24 bars',
+       'ambiguous_bar':'old stop first; pessimistic trailing after partial; fractional-volume approximation','splits':'60% train, 20% validation, 20% holdout',
        'minimum_bars':1000,'minimum_validation_trades':5,'minimum_holdout_trades':5,
        'disclaimer':'Ten testable hypotheses, not the ten best strategies. Rolling holdout reuse is not independent proof.'}
 
@@ -89,52 +90,22 @@ def indicators(bars):
     return result,atr
 
 
-def simulate(bars,signals,atr,start,end,point,cost_multiplier=1.0):
-    """Bid OHLC. Spread + 2 points/slippage/side + commission proxy 0.10R + 0.02R/day swap.
-    Normalized equity, 0.25% risk; not a broker-exact dollar/account-currency simulator.
+def simulate(bars,signals,atr,start,end,point,cost_multiplier=1.0,entry_allowed=None,entry_profiles=None,stop_atr=STOP_ATR):
+    """Current live exit policy with conservative OHLC ordering and proxy costs.
+
+    Historical news profiles are quick unless supplied with pre-entry timestamps.
     """
-    equity=peak=1.; dd=0.; trades=[]; pos=None
-    def close(price,spread,held_days):
-        nonlocal equity,peak,dd,pos
-        direction,entry,stop,target,dist,opened=pos
-        fill=price+(spread if direction<0 else 0)-direction*point*2*cost_multiplier
-        r=direction*(fill-entry)/dist-.10*cost_multiplier-.02*cost_multiplier*held_days
-        equity*=max(0.,1+RULES['risk_fraction']*r)
-        peak=max(peak,equity); dd=max(dd,(peak-equity)/peak); trades.append(r); pos=None
+    from ultimate_khorshid.tools.execution_model import new_book, step, metrics
+    book=new_book()
     for i in range(max(start,61),end):
-        b=bars[i]; spread=max(b['spread']*point,2*point)*cost_multiplier
-        desired=signals[i-1]
-        if pos:
-            direction,entry,stop,target,dist,opened=pos
-            if desired==-direction or i-opened>=24:
-                close(b['open'],spread,max(0,(b['time']-bars[opened]['time'])/86400))
-        if pos is None and desired and atr[i-1]>point*10:
-            dist=2*atr[i-1]
-            if spread/dist<=.1:
-                entry=b['open']+(spread if desired>0 else 0)+desired*point*2*cost_multiplier
-                pos=(desired,entry,entry-desired*dist,entry+desired*3*atr[i-1],dist,i)
-        if pos:
-            direction,entry,stop,target,dist,opened=pos
-            # Short exits use ask prices. Test both adverse/favorable extremes; pessimistic if both hit.
-            lo=b['low']+(spread if direction<0 else 0); hi=b['high']+(spread if direction<0 else 0)
-            op=b['open']+(spread if direction<0 else 0)
-            stop_hit=lo<=stop if direction>0 else hi>=stop
-            take_hit=hi>=target if direction>0 else lo<=target
-            if stop_hit or take_hit:
-                px=(min(stop,op) if direction>0 else max(stop,op)) if stop_hit else target
-                # close() adds ask spread; convert short trigger price back to bid first.
-                close(px-(spread if direction<0 else 0),spread,max(0,(b['time']-bars[opened]['time'])/86400))
-            else:
-                worst=(lo if direction>0 else hi)
-                marked=equity*(1+RULES['risk_fraction']*(direction*(worst-entry)/dist-.1*cost_multiplier))
-                dd=max(dd,(peak-marked)/peak)
-    if pos:
-        spread=max(bars[end-1]['spread']*point,2*point)*cost_multiplier
-        close(bars[end-1]['close'],spread,max(0,(bars[end-1]['time']-bars[pos[5]]['time'])/86400))
-    gains=sum(max(r,0) for r in trades); losses=-sum(min(r,0) for r in trades)
-    return {'trades':len(trades),'return_pct':round((equity-1)*100,5),'drawdown_pct':round(dd*100,5),
-            'profit_factor':round(gains/losses,4) if losses else (999. if gains else 0.),
-            'win_rate':round(sum(r>0 for r in trades)/len(trades),4) if trades else 0.}
+        bar={**bars[i],'period_seconds':bars[i]['time']-bars[i-1]['time']}
+        profile=(entry_profiles or {}).get(bars[i-1]['time'])
+        step(book,bar,signals[i-1],atr[i-1],point,
+             entry_ok=entry_allowed is None or bool(entry_allowed[i-1]),
+             cost_multiplier=cost_multiplier,profile=profile,stop_atr=stop_atr)
+    if book['position'] is not None:
+        step(book,bars[end-1],0,0,point,cost_multiplier=cost_multiplier,allow_entry=False,force_close=True,stop_atr=stop_atr)
+    return metrics(book)
 
 
 def qualifies(m):
@@ -162,6 +133,6 @@ def evaluate(bars,point):
     if candidate and qualifies(rows[candidate]['holdout']) and qualifies(rows[candidate]['stress']): selected=candidate
     return {'version':VERSION,'selected':selected,'candidate_before_holdout':candidate,'results':rows,'rules':RULES,
             'bars':n,'split_indices':[a,b],'first_bar':bars[0]['time'],'last_bar':bars[-1]['time'],
-            'data_sha256':hashlib.sha256(json.dumps(bars,sort_keys=True).encode()).hexdigest(),
+            'historical_news':'Unknown news uses quick profile; staged needs pre-entry timestamped evidence','data_sha256':hashlib.sha256(json.dumps(bars,sort_keys=True).encode()).hexdigest(),
             'costs':'Bid candles; historical spread (floor 2 points), 2 points slippage per side, 0.10R commission and 0.02R/day swap proxies; stress x1.5. Approximate, not broker-exact.',
             'reason':'passed screening' if selected else 'No candidate passed; no new trades.'}

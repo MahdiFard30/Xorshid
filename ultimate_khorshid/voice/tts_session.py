@@ -191,7 +191,7 @@ class Session:
                 proc.wait(timeout=2)
         self.proc = None
 
-    def speak(self, text, out='', play_it=True):
+    def speak(self, text, out='', play_it=True, *, delivery='auto'):
         from ultimate_khorshid.voice import audio as A
         controller = current_controller()
         if controller is not None:
@@ -208,7 +208,7 @@ class Session:
                 player.start()
             with tempfile.TemporaryDirectory(prefix='khorshid_chunks_') as directory:
                 cancel_path = Path(directory) / 'cancelled'
-                request = {'id': request_id, 'text': text, 'output': output, 'directory': directory}
+                request = {'id': request_id, 'text': text, 'output': output, 'directory': directory,'delivery':delivery}
                 started = time.monotonic()
                 first_event = None
                 cancellation_sent = False

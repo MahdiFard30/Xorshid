@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "enabled": false,
+  "reviewed_by_user": false,
+  "mode": "paper",
+  "approvals": [],
+  "demo_trials": [],
+  "validation_status": "not_validated",
+  "reason": "Example only. Account-specific execution settings and user consent belong in the local, ignored configs/trading_execution.json file."
+}

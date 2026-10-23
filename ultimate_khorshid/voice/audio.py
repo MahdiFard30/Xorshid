@@ -42,6 +42,36 @@ def speech_pause(pcm, rate: int, seconds: float):
     return np.concatenate((samples, np.zeros(missing, dtype='float32'))), missing / rate
 
 
+def speech_tempo(pcm, rate: int, tempo: float):
+    """Gently stretch verse without changing pitch or the reference voice.
+
+    Optional local processing: absent/failed FFmpeg leaves the generated PCM
+    intact, so a delivery adjustment cannot suppress an otherwise valid reply.
+    """
+    import numpy as np
+    if rate<=0 or not .85<=tempo<=1.15:
+        raise ValueError('Invalid speech tempo')
+    samples=np.asarray(pcm,dtype='float32')
+    if samples.ndim!=1 or not len(samples) or not np.isfinite(samples).all():
+        raise ValueError('Invalid speech PCM')
+    executable=shutil.which('ffmpeg') if tempo!=1 else None
+    if not executable:
+        return samples,False
+    try:
+        result=subprocess.run([executable,'-hide_banner','-loglevel','error',
+            '-f','f32le','-ar',str(rate),'-ac','1','-i','pipe:0',
+            '-af',f'rubberband=tempo={tempo}:pitch=1:formant=preserved',
+            '-f','f32le','pipe:1'],input=samples.astype('<f4',copy=False).tobytes(),
+            capture_output=True,check=True,timeout=5)
+        output=np.frombuffer(result.stdout,dtype='<f4').copy()
+        ratio=len(output)/len(samples)
+        if len(output) and np.isfinite(output).all() and .9/tempo<=ratio<=1.1/tempo:
+            return output,True
+    except (OSError,subprocess.SubprocessError,ValueError):
+        pass
+    return samples,False
+
+
 def which(*names: str) -> str | None:
     for n in names:
         p = shutil.which(n)

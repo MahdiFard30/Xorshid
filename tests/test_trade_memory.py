@@ -34,7 +34,7 @@ def exit_deal(ticket=2, position=10, volume=.1, profit=15.):
 
 
 def link(memory, s, request=1000, order=20):
-    run = {'id':'run-a','news_filter':{'allow_entry':True},'entry_decision':{'plan':{'reason':'signal'}}}
+    run = {'id':'run-a','news_filter':{'allow_entry':True},'entry_decision':{'plan':{'reason':'signal','exit_policy_version':2}}}
     memory.record_intent(run,s,request,'open',1,.002,.003,STRATEGY,())
     memory.record_ack(s['login'],{'id':request,'status':'executed','order':order})
 
@@ -163,12 +163,17 @@ def test_open_or_incomplete_result_does_not_change_learning(tmp_path):
 
 
 def test_request_journal_committed_before_publish_failure(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'execution_guard',lambda *a,**k:None)
+    monkeypatch.setattr(worker,'execution_gate',lambda value,*a,**k:value)
     folder=tmp_path/'channel'; folder.mkdir()
     monkeypatch.setattr(worker,'storage',lambda:tmp_path)
     monkeypatch.setattr(worker,'files',lambda:folder)
     def fail(*args): raise OSError('publish failed')
     monkeypatch.setattr(worker,'atomic',fail)
-    with pytest.raises(OSError): worker.send({'id':'run-a'},snapshot(),'open',1,.001,STRATEGY)
+    from ultimate_khorshid.tools.managed_exits import entry_profile
+    s={**snapshot(),'executor_version':9,'exit_policy_version':2}
+    plan=entry_profile({'action':'open','direction':1,'risk_fraction':.001,'symbol_cap_fraction':.005},s,{},0)
+    with pytest.raises(OSError): worker.send({'id':'run-a','entry_decision':{'plan':plan}},s,'open',1,.001,STRATEGY)
     memory=TradeMemory(tmp_path/'trade_memory.sqlite')
     with memory.connect() as con:
         assert con.execute('SELECT count(*) FROM intents').fetchone()[0]==1

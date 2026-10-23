@@ -14,8 +14,10 @@ def parse(rows):
         events.append({'title':str(r['title'])[:250],'currency':r['country'],'impact':r['impact'],'utc':dt.timestamp()})
     return events
 
-def assess(events,fetched,symbol,now,error=''):
-    base={'source':URL,'fetched_utc':fetched,'error':error,'before_minutes':30,'after_minutes':15}
+def assess(events,fetched,symbol,now,error='',controls=None):
+    controls=controls or {}
+    before,after=controls.get('news_before_minutes',30),controls.get('news_after_minutes',15)
+    base={'source':URL,'fetched_utc':fetched,'error':error,'before_minutes':before,'after_minutes':after}
     if not events or not 0<=now-fetched<=3600:
         return {**base,'allow_entry':False,'status':'calendar_unavailable','reason':'Economic calendar unavailable or older than one hour'}
     # Reject a feed for a different week, even when just downloaded.
@@ -23,7 +25,7 @@ def assess(events,fetched,symbol,now,error=''):
     if not any(datetime.fromtimestamp(e['utc'],timezone.utc).isocalendar()[:2]==week for e in events):
         return {**base,'allow_entry':False,'status':'calendar_outdated','reason':'Calendar does not cover current week'}
     relevant=[e for e in events if e['impact']=='High' and e['currency'] in CURRENCIES[symbol]|{'All'}]
-    blocked=[e for e in relevant if e['utc']-1800<=now<=e['utc']+900]
+    blocked=[e for e in relevant if e['utc']-before*60<=now<=e['utc']+after*60]
     upcoming=sorted([e for e in relevant if e['utc']>=now-900],key=lambda e:e['utc'])[:5]
     return {**base,'allow_entry':not blocked,'status':'news_window' if blocked else 'calendar_clear',
             'reason':'High-impact economic event entry window' if blocked else 'No relevant high-impact event in entry exclusion window',
@@ -87,8 +89,10 @@ class Calendar:
             except (OSError,ValueError): pass
             self.stop_event.wait(2)
     def status(self,symbol):
+        from ultimate_khorshid.tools.trading_controls import read
         data=read_cache(self.folder)
-        result=assess(data.get('events',[]),data.get('fetched_utc',0),symbol,time.time(),data.get('error',''))
+        result=assess(data.get('events',[]),data.get('fetched_utc',0),symbol,time.time(),data.get('error',''),
+            read(Path(__file__).resolve().parents[2]))
         result.update(shared_calendar=True,next_fetch_utc=data.get('next_fetch_utc',0))
         return result
     def close(self): self.stop_event.set()

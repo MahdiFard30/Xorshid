@@ -95,3 +95,14 @@ def test_expansion_still_respects_existing_g2p_phrase_bound():
     phrases=sentence_pieces(prepare_spoken_text(text))
     assert all(len(phrase)<=120 for phrase,_ in phrases)
     assert len(phrases)>1
+
+
+def test_full_english_response_does_not_send_orphan_question_mark_to_normalizer():
+    text=('Yes, of course, قربان! I can speak English too. '
+          'Is there anything specific you would like me to help you with, '
+          'or perhaps some English poetry? Just let me know!')
+    normalized=spoken(text)
+    # This verifies the crash fix, not natural English speech: this Persian
+    # frontend spells unknown Latin words and must not be labelled bilingual.
+    assert 'قربان' in normalized
+    assert all(any(c.isalnum() for c in p) for p,_ in sentence_pieces(prepare_spoken_text(text)))

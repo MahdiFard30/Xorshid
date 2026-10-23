@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "authorization": "User explicitly approved removal of entry cash cap, post-trade cooldown, losing-stop cluster pause and economic-news entry block on 2026-10-23; other values retain prior effective rules.",
+  "settings": {
+    "cooldown_bars": 0,
+    "stop_cluster_enabled": false,
+    "news_entry_block_enabled": false
+  }
+}

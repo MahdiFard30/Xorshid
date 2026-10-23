@@ -94,3 +94,94 @@ def test_last_chunk_has_no_added_pause():
     result, added = speech_pause(pcm, 24000, 0)
     np.testing.assert_array_equal(result, pcm)
     assert added == 0
+
+
+@pytest.mark.parametrize('punctuation',['...', '…', '!!!', '؟؟', '. . .', '؛؛', '«...»'])
+def test_punctuation_runs_never_become_standalone_speech(punctuation):
+    text=f'چشم، قربان{punctuation}\nسحر بلبل حکایت با صبا کرد{punctuation}'
+    pieces=sentence_pieces(text)
+    assert len(pieces)==2
+    assert all(any(c.isalnum() for c in phrase) for phrase,_ in pieces)
+    assert pieces[0][0].startswith('چشم، قربان')
+    assert pieces[1][0].startswith('سحر بلبل حکایت با صبا کرد')
+
+
+def test_punctuation_only_response_has_no_g2p_phrases():
+    assert sentence_pieces('...\n«…» !!! ؟؟')==[]
+
+
+def test_ellipsis_preserves_words_and_decimal_in_the_same_response():
+    pieces=sentence_pieces('چشم، قربان... مبلغ ۱۲.۵ تومان است...\nحافظ بخوان!')
+    assert len(pieces)==3
+    assert '۱۲.۵' in pieces[1][0]
+    assert all(any(c.isalnum() for c in phrase) for phrase,_ in pieces)
+
+
+@pytest.mark.parametrize('punctuation',['?', '؟', '!', '...', '،'])
+def test_length_split_cannot_leave_an_orphan_punctuation_chunk(punctuation):
+    pieces=sentence_pieces('سلام خوبی '+punctuation,max_chars=9)
+    assert len(pieces)==1
+    assert pieces[0][0]=='سلام خوبی'
+    assert pieces[0][1]>=.22
+
+
+def test_punctuation_length_overflow_before_more_words_preserves_words():
+    pieces=sentence_pieces('سلام ؟؟؟؟؟؟؟؟؟؟؟؟؟؟ خوبی',max_chars=5)
+    assert [p for p,_ in pieces]==['سلام','خوبی']
+
+
+def test_verse_reading_preserves_words_and_marks_couplet_pauses():
+    from ultimate_khorshid.voice.tts_text import reading_phrases
+    poem='دوش دیدم که ملائک در میخانه زدند\nگل آدم بسرشتند و به پیمانه زدند\n\nساکنان حرم ستر و عفاف ملکوت\nبا من راه نشین باده مستانه زدند'
+    pieces=reading_phrases(poem)
+    assert [p for p,_,_ in pieces]==poem.replace('\n\n','\n').splitlines()
+    assert [pause for _,pause,_ in pieces]==[.32,.50,.32,.50]
+    assert all(verse for _,_,verse in pieces)
+    assert all(not verse for _,_,verse in reading_phrases(poem,'plain'))
+
+
+@pytest.mark.parametrize('text',[
+    'سلام قربان امروز چطور هستید؟\nامیدوارم روز خوبی داشته باشید.',
+    '- وضعیت حساب بررسی شد\n- همه چیز آماده است',
+    '۱. برنامه اول آماده است\n۲. برنامه دوم آماده است',
+    'Hello how are you\nI am doing fine',
+    'این فقط یک سطر است',
+])
+def test_prose_lists_and_single_lines_do_not_trigger_verse_delivery(text):
+    from ultimate_khorshid.voice.tts_text import reading_phrases
+    assert not any(verse for _,_,verse in reading_phrases(text))
+
+
+def test_optional_tempo_processor_failure_preserves_valid_speech(monkeypatch):
+    from ultimate_khorshid.voice import audio
+    pcm=np.full(2400,.1,dtype='float32')
+    monkeypatch.setattr(audio.shutil,'which',lambda name:'/fake/ffmpeg')
+    def fail(*a,**k):raise OSError('not available')
+    monkeypatch.setattr(audio.subprocess,'run',fail)
+    out,changed=audio.speech_tempo(pcm,24000,.94)
+    np.testing.assert_array_equal(out,pcm)
+    assert not changed
+
+
+def test_time_stretch_keeps_pitch_and_adjusts_duration():
+    from ultimate_khorshid.voice.audio import speech_tempo
+    import shutil
+    import subprocess
+    if not shutil.which('ffmpeg'):pytest.skip('Optional FFmpeg not installed')
+    filters=subprocess.run(['ffmpeg','-hide_banner','-filters'],capture_output=True,text=True,check=True)
+    if 'rubberband' not in filters.stdout:pytest.skip('Optional Rubber Band not installed')
+    rate=24000
+    pcm=(.1*np.sin(2*np.pi*220*np.arange(rate*2)/rate)).astype('float32')
+    out,changed=speech_tempo(pcm,rate,.94)
+    assert changed
+    assert len(out)/len(pcm)==pytest.approx(1/.94,abs=.015)
+    frequency=np.fft.rfftfreq(len(out),1/rate)[np.argmax(abs(np.fft.rfft(out)))]
+    assert frequency==pytest.approx(220,abs=1)
+    assert np.isfinite(out).all()
+
+
+def test_quoted_verse_with_ellipsis_remains_a_couplet():
+    from ultimate_khorshid.voice.tts_text import reading_phrases
+    text='«سحر بلبل حکایت با صبا کرد\nکه عشق روی گل با ما چه‌ها کرد...»'
+    rows=reading_phrases(text)
+    assert len(rows)==2 and all(verse for _,_,verse in rows)

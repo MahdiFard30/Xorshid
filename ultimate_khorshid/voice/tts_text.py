@@ -71,22 +71,29 @@ def sentence_pieces(text, max_chars=120):
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     result, current = [], []
 
+    def append_phrase(phrase, pause):
+        if any(char.isalnum() for char in phrase):
+            result.append((phrase, pause))
+        elif result:
+            result[-1] = (result[-1][0], max(result[-1][1], pause))
+
     def flush(pause):
         phrase = "".join(current).strip()
         current.clear()
-        if not phrase:
-            if result:
-                result[-1] = (result[-1][0], max(result[-1][1], pause))
+        # Ellipses/repeated punctuation must not become standalone G2P input.
+        # They carry a pause, but no pronounceable word (normalizing '.' fails).
+        if not any(char.isalnum() for char in phrase):
+            append_phrase(phrase, pause)
             return
         words, chunk = phrase.split(), []
         for word in words:
             candidate = " ".join(chunk + [word])
             if chunk and len(candidate) > max_chars:
-                result.append((" ".join(chunk), 0.08))
+                append_phrase(" ".join(chunk), 0.08)
                 chunk = []
             chunk.append(word)
         if chunk:
-            result.append((" ".join(chunk), pause))
+            append_phrase(" ".join(chunk), pause)
 
     for i, char in enumerate(text):
         # Remove typographic quote delimiters, not the words inside.
@@ -107,6 +114,45 @@ def sentence_pieces(text, max_chars=120):
         # splitter isolated short words and made the reading sound staccato.
     flush(0.22)
     return result
+
+
+def reading_phrases(text, delivery='auto'):
+    """Mark short verse lines; preserve prose, words and safe phrase lengths.
+
+    Auto mode is deliberately conservative: at least two adjacent Persian
+    lines, without list markers, headings or sentence-ending prose punctuation.
+    """
+    if delivery not in ('auto','plain'):
+        raise ValueError('Unknown speech delivery')
+    verses={}
+    block=[]
+
+    def finish_block():
+        if len(block)>=2:
+            for i,line in enumerate(block):
+                pieces=sentence_pieces(line)
+                for j,(phrase,_) in enumerate(pieces):
+                    boundary=j==len(pieces)-1
+                    pause=(.50 if i==len(block)-1 or i%2==1 else .32) if boundary else .08
+                    verses[phrase]=pause
+        block.clear()
+
+    if delivery=='auto':
+        for line in text.splitlines():
+            line=line.strip().strip('«»“”"').strip()
+            words=line.split()
+            ending=re.sub(r'(?:\.{2,}|…)+$', '', line)
+            eligible=(3<=len(words)<=16 and len(line)<=120
+                      and sum('\u0600'<=c<='\u06ff' for c in line)>len(line)*.5
+                      and not re.match(r'^(?:[-*#>•]|[0-9۰-۹]+[.)])',line)
+                      and not re.search(r'[:.!?؟؛]$',ending))
+            if eligible:
+                block.append(line)
+            else:
+                finish_block()
+        finish_block()
+    return [(phrase,max(pause,verses.get(phrase,0)),phrase in verses)
+            for phrase,pause in sentence_pieces(text)]
 
 
 def phoneme_pieces(text, token_count, budget=18):

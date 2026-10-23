@@ -54,12 +54,14 @@ def _text_of(data: dict) -> str:
 class GeminiSTT:
     """رونویسی صدا با جمینای (فارسی/انگلیسی/چندزبانه)."""
 
-    def __init__(self, model: str = "gemini-3.5-flash-lite") -> None:
-        self.model = model
+    def __init__(self, model: str = "") -> None:
+        self.model = model or os.environ.get('KHORSHID_STT_MODEL', '').strip() or 'gemini-3.5-transcribe'
 
     def transcribe(self, wav_path: str, lang_hint: str = "fa") -> str:
         with open(wav_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
+        if self.model == 'gemini-3.5-transcribe':
+            return self._dedicated_transcription(b64, lang_hint)
         payload = {"contents": [{"role": "user", "parts": [
             {"text": transcription_instruction(lang_hint)},
             {"inlineData": {"mimeType": "audio/wav", "data": b64}}]}],
@@ -69,6 +71,47 @@ class GeminiSTT:
         if not txt:
             raise RuntimeError("رونویسی خالی برگشت.")
         return txt
+
+    def _dedicated_transcription(self, b64: str, lang_hint: str) -> str:
+        """Use the speech model without asking a chat model to rewrite speech."""
+        try:
+            from ultimate_khorshid.tools.app_launcher import speech_vocabulary
+            vocabulary = speech_vocabulary()[:1000]
+        except Exception:
+            vocabulary = []
+        payload = {'model': self.model, 'store': False,
+                   'input': [{'type': 'audio', 'mime_type': 'audio/wav', 'data': b64}],
+                   'generation_config': {'transcription_config': {
+                       'language_codes': ['fa-IR'] if lang_hint == 'fa' else [lang_hint],
+                       'mode': {'type': 'verbatim'},
+                       'custom_vocabulary': vocabulary}}}
+        data = _post_transcription(payload)
+        if data.get('status') != 'completed':
+            raise RuntimeError('Speech transcription did not complete')
+        # Only final model text is a transcript; never use thoughts/input steps.
+        blocks = [c.get('text', '') for step in data.get('steps', [])
+                  if step.get('type') == 'model_output' for c in step.get('content', [])
+                  if c.get('type') == 'text' and isinstance(c.get('text'), str)]
+        text = ' '.join(blocks).strip()
+        if not text:
+            raise RuntimeError('Speech transcription returned no text')
+        return text
+
+
+def _post_transcription(payload: dict) -> dict:
+    key = api_key()
+    if not key:
+        raise RuntimeError('GEMINI_API_KEY تنظیم نشده.')
+    request = urllib.request.Request(
+        'https://generativelanguage.googleapis.com/v1beta/interactions',
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json', 'x-goog-api-key': key})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        # A provider response can include identifiers; keep errors local and terse.
+        raise RuntimeError(f'Gemini speech HTTP {exc.code}') from None
 
 
 def transcription_instruction(lang_hint: str = "fa") -> str:
@@ -82,7 +125,11 @@ def transcription_instruction(lang_hint: str = "fa") -> str:
     return (
         'Transcribe only what is audible, in its original language. '
         f'Expected language: {language}; mixed Persian and English is common. '
-        'This is a desktop assistant: short commands often contain English application names '
+        'The speaker uses a general personal assistant for conversation, poetry, questions, '
+        'and computer tasks. Do not assume every utterance is an application command. '
+        'Preserve Persian names, poetry requests, and the actual verb as spoken; '
+        'never turn a request to read or recite into an instruction to open an app. '
+        'Short computer commands sometimes contain English application names '
         'pronounced with a Persian accent. Preserve such proper names in English or Persian; '
         'do not reinterpret them as an unrelated English sentence. '
         'Do not answer, translate, complete, or invent speech. If no speech is intelligible, output nothing. '
@@ -123,14 +170,20 @@ def transcribe_file(path: str, engine: str = "auto") -> str:
             if want == "local":
                 raise RuntimeError(f"رونویسی محلی نشد: {e}")
     if want in ("auto", "gemini") and api_key():
-        try:
-            text = GeminiSTT().transcribe(path)
-            check_cancelled()
-            return text
-        except CancelledError:
-            raise
-        except Exception:
-            check_cancelled()
+        primary = GeminiSTT()
+        recognizers = [primary]
+        if primary.model == 'gemini-3.5-transcribe':
+            recognizers.append(GeminiSTT('gemini-3.5-flash-lite'))
+        for recognizer in recognizers:
+            try:
+                check_cancelled()
+                text = recognizer.transcribe(path)
+                check_cancelled()
+                return text
+            except CancelledError:
+                raise
+            except Exception:
+                check_cancelled()
     if want in ('auto', 'gemini', 'groq'):
         from ultimate_khorshid.engine.groq import GroqEngine
         from ultimate_khorshid.core.config import load_config

@@ -13,7 +13,7 @@ from ultimate_khorshid.tools import mt5_multi_worker as worker
 
 def sample(instance='boot-a', bar=100, positions=0):
     return {'executor_version':6,'executor_instance':instance,'schema':2,'demo':True,'generated_utc':1000,
-            'connected':True,'login':123,'symbol':'EURUSD','period':16385,'currency':'USD',
+            'period_seconds':3600,'broker_utc_offset_seconds':0,'connected':True,'login':123,'symbol':'EURUSD','period':16385,'currency':'USD',
             'balance':1000.,'equity':1000.,'point':.00001,'bid':1.1,'ask':1.1001,
             'tick_age_seconds':1,'bar_age_seconds':1,'entry_window_seconds':300,'max_positions':2,
             'algo_enabled':True,'halted':False,'own_positions':positions,'blocking_positions':0,
@@ -66,6 +66,7 @@ def test_invalid_instance_never_enters_lease(instance):
 
 @pytest.fixture
 def channels(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'ROOT',tmp_path)
     files=tmp_path/'terminal'; files.mkdir()
     storage=tmp_path/'worker'; storage.mkdir()
     monkeypatch.setattr(worker,'files',lambda:files)
@@ -91,7 +92,7 @@ def test_snapshot_waits_for_history_and_partial_files_instead_of_stopping(channe
 
 def test_snapshots_accept_current_and_legacy_but_reject_live_accounts(channels):
     files,_=channels
-    for version in (5,6):
+    for version in (5,6,7,8,9):
         publish(files,dict(sample(),executor_version=version))
         assert worker.snapshot()['executor_version']==version
     publish(files,dict(sample(),demo=False))
@@ -101,6 +102,8 @@ def test_snapshots_accept_current_and_legacy_but_reject_live_accounts(channels):
 
 
 def prepare_loop(monkeypatch,channels,sequence,plan):
+    # Recovery tests isolate handover from sizing, with a valid reference budget.
+    plan={**plan,'risk_fraction':.001,'symbol_cap_fraction':.005}
     files,storage=channels
     snapshots=iter(sequence)
     def snapshot():
@@ -113,21 +116,63 @@ def prepare_loop(monkeypatch,channels,sequence,plan):
     monkeypatch.setattr(worker.signal,'signal',lambda *args:None)
     monkeypatch.setattr(worker.time,'sleep',lambda seconds:None)
     monkeypatch.setattr(worker,'report',lambda:None)
+    monkeypatch.setattr('ultimate_khorshid.tools.research_observer.ensure_started',lambda root:None)
     monkeypatch.setattr(worker,'save_screen',lambda *args:None)
     monkeypatch.setattr(worker,'Calendar',lambda:SimpleNamespace(status=lambda symbol:{},close=lambda:None))
     monkeypatch.setattr(worker,'gate',lambda value,news:value)
+    monkeypatch.setattr(worker,'portfolio_gate',lambda value,*args:value)
+    monkeypatch.setattr(worker,'execution_gate',lambda value,*args,**kwargs:value)
+    monkeypatch.setattr(worker,'execution_selection',lambda *a,**k:{'selected':'strategy','allowed':True,
+        'context_paused':[],'reason':'Isolated recovery fixture; authorization tested separately'})
     monkeypatch.setattr(worker,'indicators',lambda bars:({},[1]))
     monkeypatch.setattr(worker,'decision',lambda *args:dict(plan))
     learner=SimpleNamespace(activate=lambda s:None,learn_live=lambda *a:None,advance=lambda *a:None,
-                            choose=lambda s:'strategy',attempted=lambda s:None,data={'decisions':[{}]})
+                            choose=lambda s,context=None,news_adjustments=None:'strategy',attempted=lambda s:None,
+                            event=lambda *a:None,save=lambda:None,data={'decisions':[{}]})
     monkeypatch.setattr('ultimate_khorshid.tools.demo_learning.Experience',lambda path:learner)
     sent=[]
-    def send(run,s,action,*args):
+    def send(run,s,action,*args,**kwargs):
         sent.append((action,s['bars'][-1]['time']))
         (files/'khorshid_demo_request.tsv').write_text('queued')
         run['last_request']=12345
     monkeypatch.setattr(worker,'send',send)
     return sent,files,storage
+
+
+def test_allocation_delay_retries_inside_entry_window_without_duplicate_orders(monkeypatch,channels):
+    first=sample()
+    sequence=[first,first,first,first,dict(first,_stop=True)]
+    sent,files,storage=prepare_loop(monkeypatch,channels,sequence,{'action':'open','direction':1,'strategy':'strategy','reason':'signal'})
+    calls=[]
+    def gate(plan,*args):
+        calls.append(1)
+        if len(calls)==1:return {'status':'waiting_for_portfolio_allocation','reason':'observer still reading new bar'}
+        return plan
+    clock=iter(range(0,100,3))
+    monkeypatch.setattr(worker,'portfolio_gate',gate)
+    monkeypatch.setattr(worker.time,'monotonic',lambda:next(clock))
+    worker.run_loop()
+    assert len(calls)==2
+    assert sent==[('open',100)]
+
+
+@pytest.mark.parametrize('status,note,retries',[
+    ('rejected','Portfolio allocation busy; no order sent',2),
+    ('not_confirmed','Timeout; execution unknown',1),
+])
+def test_only_explicit_pre_order_lock_rejection_can_be_retried(monkeypatch,channels,status,note,retries):
+    first=sample();sequence=[first,first,first,first,dict(first,_stop=True)]
+    sent,files,storage=prepare_loop(monkeypatch,channels,sequence,{'action':'open','direction':1,'strategy':'strategy','reason':'signal'})
+    def send(run,s,action,*args):
+        sent.append((action,s['bars'][-1]['time']))
+        run['last_request']=len(sent)
+        if len(sent)==1:
+            (files/'khorshid_demo_ack.json').write_text(json.dumps({'id':1,'status':status,'note':note}))
+    clock=iter(range(0,100,3))
+    monkeypatch.setattr(worker,'send',send)
+    monkeypatch.setattr(worker.time,'monotonic',lambda:next(clock))
+    worker.run_loop()
+    assert len(sent)==retries
 
 
 @pytest.mark.parametrize('gap',[True,False])
@@ -218,3 +263,74 @@ def test_worker_waits_through_weekend_and_resumes_on_fresh_bar(monkeypatch,chann
     assert sent==[('open',200)]
     assert json.loads((storage/'state.json').read_text())['status']=='stopped'
     assert 'User requested portfolio stop' in (files/'khorshid_demo_stop.flag').read_text()
+
+
+def test_execution_disabled_cannot_be_overridden_by_an_exploratory_signal(monkeypatch,channels):
+    from ultimate_khorshid.tools.execution_policy import select
+    initial=sample();sequence=[initial,initial,dict(initial,_stop=True)]
+    sent,files,storage=prepare_loop(monkeypatch,channels,sequence,{'action':'open','direction':1,'strategy':'strategy','reason':'exploratory candidate'})
+    monkeypatch.setattr(worker,'execution_selection',select)
+    worker.run_loop()
+    assert sent==[]
+    assert not (files/'khorshid_demo_request.tsv').exists()
+
+
+def test_profit_exit_monitors_each_snapshot_without_waiting_for_a_new_candle(monkeypatch,channels):
+    from ultimate_khorshid.tools import execution_policy
+    s=sample(positions=1)
+    s['positions']=[{'identifier':1,'ticket':22}]
+    sequence=[s,s,s,s,dict(s,_stop=True,positions=[],own_positions=0)]
+    sent,files,storage=prepare_loop(monkeypatch,channels,sequence,{'status':'waiting','reason':'no signal'})
+    monkeypatch.setattr(execution_policy,'authorize',lambda *a,**k:{'profit_exit_mode':'first_positive_estimated_net'})
+    calls=[]
+    def exit_plan(snapshot):
+        calls.append(1)
+        return None if len(calls)==1 or not snapshot['positions'] else {'action':'close_tickets','tickets':[22],
+            'reason':'positive estimated net','exit_details':[]}
+    monkeypatch.setattr(worker,'first_positive_exit',exit_plan)
+    worker.run_loop()
+    assert sent==[('close_tickets',100)]
+
+
+def test_supervised_resume_preserves_history_and_rejects_stale_or_wrong_lease(monkeypatch,channels):
+    from ultimate_khorshid.tools import execution_policy
+    files,storage=channels;s=sample()
+    run={'id':'same-session','login':s['login'],'symbol':s['symbol'],'period':s['period'],
+         'started_utc':12,'baseline_deals':[42]}
+    (storage/'state.json').write_text(json.dumps(run))
+    monkeypatch.setattr(execution_policy,'authorize',lambda *a,**k:{'allowed':True})
+    monkeypatch.setattr(worker.time,'time',lambda:1000)
+    (files/'khorshid_demo_lease.tsv').write_text(lease_text(s,run['id'],1000))
+    result=worker.resumed_state(s)
+    assert result['id']==run['id'] and result['started_utc']==12 and result['baseline_deals']==[42]
+    (files/'khorshid_demo_lease.tsv').write_text(lease_text(s,'wrong-session',1000))
+    with pytest.raises(ValueError):worker.resumed_state(s)
+    (files/'khorshid_demo_lease.tsv').write_text(lease_text(s,run['id'],900))
+    with pytest.raises(ValueError):worker.resumed_state(s)
+
+
+def test_user_disabled_news_block_allows_entry_even_when_calendar_is_unavailable(monkeypatch,channels):
+    from ultimate_khorshid.tools.mt5_news_calendar import gate
+    s=sample();s['trading_controls']={'news_entry_block_enabled':False}
+    sequence=[s,s,dict(s,_stop=True)]
+    sent,files,storage=prepare_loop(monkeypatch,channels,sequence,{'action':'open','direction':1,'strategy':'strategy','reason':'signal'})
+    monkeypatch.setattr(worker,'gate',gate)
+    monkeypatch.setattr(worker,'Calendar',lambda:SimpleNamespace(status=lambda symbol:{'allow_entry':False,'status':'calendar_unavailable'},close=lambda:None))
+    worker.run_loop()
+    assert sent==[('open',100)]
+
+
+@pytest.mark.parametrize('closing',[False,True])
+def test_negative_score_wait_reason_is_saved_without_blocking_position_exit(monkeypatch,channels,closing):
+    s=sample();sequence=[s,s,dict(s,_stop=True)]
+    plan={'action':'close_tickets','tickets':[42],'reason':'existing position exit'} if closing else {
+        'status':'waiting_for_entry_signal','reason':'no signal'}
+    sent,files,storage=prepare_loop(monkeypatch,channels,sequence,plan)
+    monkeypatch.setattr(worker,'execution_selection',lambda *a,**k:{'allowed':True,'selected':None,
+        'score_rejected':['strategy'],'context_paused':[],'reason':'No non-negative final strategy score; entry declined'})
+    worker.run_loop()
+    decision=json.loads((storage/'state.json').read_text())['entry_decision']['plan']
+    if closing:
+        assert sent==[('close_tickets',100)] and decision['action']=='close_tickets'
+    else:
+        assert sent==[] and decision['status']=='waiting_for_nonnegative_strategy_score'
