@@ -94,9 +94,8 @@ def cmd_memory(args) -> int:
     mem = get_memory(cfg.storage.db_path)
     auto = AutomaticMemory(cfg.storage.db_path, cfg.agent.memory_retention)
     if getattr(args, "forget_all", False):
-        if getattr(args, "yes", False) or _confirm("حذف همهٔ گفتگوها، اطلاعات و حافظهٔ محلی؟"):
-            auto.clear(everything=True)
-            print("حافظهٔ محلی پاک شد.")
+        auto.clear(everything=True)
+        print("حافظهٔ محلی پاک شد.")
     elif getattr(args, "clear_conversation", False):
         auto.clear(session="local")
         print("سابقهٔ مکالمه پاک شد؛ اطلاعات کاربر و حافظهٔ دستی باقی ماند.")
@@ -533,7 +532,7 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("ask", help="یک سؤال تکی")
     c.add_argument("query")
     c.add_argument("--agent", default=None)
-    c.add_argument("--yes", "-y", action="store_true", help="بدون تأییدیه")
+    c.add_argument("--yes", "-y", action="store_true", help="پرچم سازگاری؛ ابزارهای غیرمعاملاتی تأیید دوباره نمی‌خواهند")
     c.add_argument("--verbose", "-v", action="store_true")
     c.add_argument("--stream", action="store_true", help="نمایش زنده توکن‌ها")
     c.add_argument("--resume", default="", help="ادامه پلن از چک‌پوینت (آیدی)")
@@ -551,7 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--facts", action="store_true", help="اطلاعات استخراج‌شده از گفتگو")
     c.add_argument("--clear-conversation", action="store_true")
     c.add_argument("--forget-all", action="store_true")
-    c.add_argument("--yes", action="store_true", help="تأیید حذف حافظه")
+    c.add_argument("--yes", action="store_true", help="پرچم سازگاری؛ دستور حذف حافظه مستقیماً اجرا می‌شود")
     c.add_argument("--add", default=None)
     c.add_argument("--search", default=None)
     c.add_argument("--list", action="store_true")

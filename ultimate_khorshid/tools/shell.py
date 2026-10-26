@@ -51,7 +51,7 @@ class ShellExecTool(BaseTool):
                 "working_dir": {"type": "string"},
                 "sandbox": {"type": "string", "description": "auto/docker/firejail/off (پیش‌فرض auto)"}},
                 "required": ["command"]},
-            category="exec", requires_confirmation=True,
+            category="exec",
             timeout_seconds=90.0, required_capabilities=["code:execute"])
 
     def execute(self, **p: Any) -> ToolResult:
@@ -91,7 +91,7 @@ class PythonExecTool(BaseTool):
                 "timeout": {"type": "integer", "description": "ثانیه (پیش‌فرض ۳۰)"},
                 "sandbox": {"type": "string", "description": "auto/docker/firejail/off (پیش‌فرض auto)"}},
                 "required": ["code"]},
-            category="exec", requires_confirmation=True,
+            category="exec",
             timeout_seconds=90.0, required_capabilities=["code:execute"])
 
     def execute(self, **p: Any) -> ToolResult:

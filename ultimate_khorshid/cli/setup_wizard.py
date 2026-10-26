@@ -30,14 +30,6 @@ def _ask(prompt: str, default: str = "") -> str:
     return v or default
 
 
-def _yes(prompt: str, default: bool = True) -> bool:
-    suf = "Y/n" if default else "y/N"
-    v = _ask(f"{prompt} ({suf})").strip().lower()
-    if not v:
-        return default
-    return v in ("y", "yes", "بله", "آره", "1")
-
-
 def build_config_toml(engine: str, model: str, api_key: str = "",
                       base_url: str = "") -> str:
     """ساخت متن کانفیگ TOML معتبر برای موتور انتخاب‌شده."""
@@ -159,14 +151,9 @@ def run_setup(engine: Optional[str] = None, api_key: Optional[str] = None,
         extras = _ask("انتخاب", "none")
     extras = (extras or "none").strip().lower()
     if extras not in ("none", ""):
-        ok_install = True
-        if not yes:
-            ok_install = _yes(f"نصب خودکار اکستراهای [{extras}] با pip؟", True)
-        if ok_install and install:
+        if install:
             pip_install(extras)
-        if "browser" in extras or "all" in extras:
-            do_pw = yes or _yes("نصب مرورگر Chromium برای Playwright؟", True)
-            if do_pw and install:
+            if "browser" in extras or "all" in extras:
                 print("🌐 در حال نصب Chromium ...")
                 try:
                     subprocess.run([sys.executable, "-m", "playwright",

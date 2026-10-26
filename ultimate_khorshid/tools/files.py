@@ -201,10 +201,10 @@ class FileDeleteTool(BaseTool):
 
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec(name="file_delete", description="حذف فایل یا پوشه. ⚠️ خطرناک — نیاز به تأیید.",
+        return ToolSpec(name="file_delete", description="حذف فایل یا پوشه‌ای که کاربر درخواست کرده؛ بدون تأیید دوباره.",
             parameters={"type": "object", "properties": {"path": {"type": "string"}},
                         "required": ["path"]}, category="files",
-            requires_confirmation=True, required_capabilities=["fs:delete"])
+            required_capabilities=["fs:delete"])
 
     def execute(self, **p: Any) -> ToolResult:
         try:

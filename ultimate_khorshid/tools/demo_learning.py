@@ -115,8 +115,12 @@ class Experience:
         candidates=[k for k in candidates if k not in paused]
         news_adjustments=news_adjustments or {}
         raw_scores={k:self.score(k)+assessments.get(k,{}).get('adjustment',0)+max(-.15,min(.15,news_adjustments.get(k,0))) for k in candidates}
+        # Exploration orders eligible candidates; it is not profit evidence.
+        # Keep it in the ranking, but do not let it rescue negative evidence.
+        evidence_scores={k:self.score(k,explore=False)+assessments.get(k,{}).get('adjustment',0)+max(-.15,min(.15,news_adjustments.get(k,0))) for k in candidates}
         scores={k:round(value,6) for k,value in raw_scores.items()}
-        score_rejected=[k for k in candidates if raw_scores[k]<0]
+        evidence_rejected=[k for k in candidates if evidence_scores[k]<0]
+        score_rejected=[k for k in candidates if raw_scores[k]<0 or evidence_scores[k]<0]
         eligible=[k for k in candidates if k not in score_rejected]
         selected=max(eligible,key=lambda k:(scores[k],-self.stats[k]['attempts'],-NAMES.index(k))) if eligible else None
         details={k:{'paper_results':self.stats[k]['paper_n'],'demo_results':self.stats[k]['verified_demo_n'],'legacy_demo_results':self.data['stats'][k]['demo_n'],'experience_score':round(self.score(k,False),6),'exploration_bonus':round(self.score(k)-self.score(k,False),6),'total_score':scores[k]} for k in candidates}
@@ -124,15 +128,20 @@ class Experience:
             pn=min(self.stats[k]['paper_n'],20);dn=3*min(self.stats[k]['verified_demo_n'],20);total=pn+dn
             details[k].update(paper_mean_r=self.stats[k]['paper_mean_r'],verified_demo_mean_r=self.stats[k]['verified_demo_mean_r'],
                 unrounded_total_score=raw_scores[k],entry_score_eligible=k not in score_rejected,
+                evidence_score=evidence_scores[k],
+                entry_score_rejections=(["negative_evidence_without_exploration"] if evidence_scores[k]<0 else [])+
+                    (["negative_final_score"] if raw_scores[k]<0 else []),
                 paper_weight=pn/total if total else 0,verified_demo_weight=dn/total if total else 0,
                 context_adjustment=assessments.get(k,{}).get('adjustment',0),
                 news_adjustment=max(-.15,min(.15,news_adjustments.get(k,0))))
         d={'score_details':details,'learning_regime':self.regime,'utc':time.time(),'candidates':scores,'selected':selected,
            'score_rejected':score_rejected,'entry_score_floor':0.,
+           'evidence_rejected':evidence_rejected,'evidence_score_floor':0.,
            'market_context':context,'context_assessments':assessments,'context_paused':paused,
            'context_error':self.data.get('context_error'),'news_adjustments':news_adjustments,
            'reason':'experience score + exploration bonus + bounded context evidence' if selected and context
                     else 'experience score + exploration bonus among current signals' if selected
+                    else 'No non-negative strategy evidence without exploration; entry declined' if evidence_rejected
                     else 'No non-negative final strategy score; entry declined' if score_rejected
                     else 'Negative context evidence paused all current signals' if paused else 'No closed-bar entry signal'}
         return d

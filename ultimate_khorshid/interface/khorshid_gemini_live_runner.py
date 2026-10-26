@@ -49,8 +49,8 @@ def make_config(voice, runtime, memory_context=''):
         'این نسخه آزمایش مکالمه است و ابزار کنترل کامپیوتر یا ترید ندارد؛ ادعای اجرای برنامه یا معامله نکن.',
         'ابزارهای خورشید از طریق khorshid_list_tools و khorshid_execute_tool در دسترس‌اند. '
         'برای عمل روی کامپیوتر ابتدا ابزار صحیح را پیدا کن، فقط با درخواست صریح کاربر اجرا کن؛ '
-        'انجام کاری را پیش از دریافت نتیجهٔ موفق ادعا نکن. برای اقدامات مخرب، تغییر مالی، '
-        'یا ارسال اطلاعات حساس، اول اجازهٔ صریح بگیر.') +
+        'انجام کاری را پیش از دریافت نتیجهٔ موفق ادعا نکن. '
+        'در کارهای غیرمعاملاتی دستور کاربر مجوز همان کار است؛ تأیید دوباره نخواه.') +
         '\nابزارهای فعلی خورشید:\n' + tool_guide(runtime))
     # Always supply a positive, explicit tool policy even if the trial SYSTEM
     # wording changes and the replacement above no longer matches.
@@ -102,6 +102,8 @@ start یا stop را به جای status/report فراخوانی نکن. تغیی
         'پس از دریافت نتیجهٔ ابزار، نتیجهٔ واقعی را کوتاه به فارسی بگو؛ وعدهٔ انجام کار جای اجرای ابزار نیست.')
     if memory_context:
         cfg['system_instruction'] += '\n\n' + memory_context
+    from ultimate_khorshid.security.permissions import DIRECT_ACTION_INSTRUCTION
+    cfg['system_instruction'] += '\n\n' + DIRECT_ACTION_INSTRUCTION
     cfg['tools'] = [{'function_declarations': [
         {'name': 'khorshid_list_tools',
          'behavior': 'BLOCKING',
@@ -109,7 +111,7 @@ start یا stop را به جای status/report فراخوانی نکن. تغیی
          'parameters': {'type': 'OBJECT', 'properties': {}}},
         {'name': 'khorshid_execute_tool',
          'behavior': 'BLOCKING',
-         'description': 'Execute a registered Khorshid tool. For trading activity/status use tool_name=mt5_demo and arguments_json={\"action\":\"status\"}; detailed report uses report. These are read-only. Never use start/stop for reports. The local executor applies the configured approval mode.',
+         'description': 'Execute a registered Khorshid tool. Non-trading requests run directly without a second confirmation. For trading activity/status use tool_name=mt5_demo and arguments_json={\"action\":\"status\"}; detailed report uses report. These are read-only. Never use start/stop for reports. Existing trading authorization remains enforced.',
          'parameters': {'type': 'OBJECT', 'properties': {
              'tool_name': {'type': 'STRING', 'description': 'Exact registered tool name'},
              'arguments_json': {'type': 'STRING', 'description': 'JSON object for this tool, e.g. {}'}},
@@ -124,8 +126,10 @@ def execute_tool(runtime, name, args):
         return {'tools': [{
             'name': t.spec.name, 'description': t.spec.description,
             'parameters': t.spec.parameters,
-            'requires_confirmation': t.spec.requires_confirmation,
-            'approval_policy': 'Local confirmation is also evaluated per tool action by the executor.',
+            'requires_confirmation': t.spec.requires_confirmation if t.spec.name in ('mt5_demo', 'mt5_multi_worker', 'mt5_read') else False,
+            'approval_policy': ('Existing trading authorization applies.'
+                                if t.spec.name in ('mt5_demo', 'mt5_multi_worker', 'mt5_read')
+                                else 'Execute the user request directly; no repeat confirmation.'),
         } for t in runtime.executor.tools.values()]}
     if name != 'khorshid_execute_tool':
         return {'success': False, 'error': 'Unknown Live bridge function'}
@@ -135,7 +139,7 @@ def execute_tool(runtime, name, args):
     parameters = args.get('arguments_json', '{}')
     if not isinstance(parameters, str):
         return {'success': False, 'error': 'arguments_json must be JSON text'}
-    # Validate tool arguments before evaluating permissions.
+    # Validate tool arguments before execution.
     try:
         parsed = json.loads(parameters)
         if not isinstance(parsed, dict):
@@ -155,12 +159,11 @@ def execute_tool(runtime, name, args):
 
     blocked_name = any(
         x in tool_name.lower()
-        for x in ('trade', 'order', 'mt5', 'metatrader',
-                  'shell_exec', 'python_exec')
+        for x in ('trade', 'order', 'mt5', 'metatrader')
     )
 
     # MT5 reporting is available; mutations stay outside this Live bridge.
-    # Other consequential actions go through the shared local approval dialog.
+    # Non-trading tools run directly through the shared executor.
     if blocked_name and not read_only_mt5:
         return {
             'success': False,
@@ -299,7 +302,7 @@ async def conversation(key):
         gate.resume()
         sun.state('idle')
         print('[Gemini Live Khorshid] Connected. Hold 1, speak, release. Ctrl+C exits.', flush=True)
-        print('[Live] حافظه تابع تنظیمات مشترک است؛ ابزارهای اثرگذار تأیید محلی می‌خواهند.', flush=True)
+        print('[Live] حافظه تابع تنظیمات مشترک است؛ کارهای غیرمعاملاتی بدون تأیید دوباره اجرا می‌شوند.', flush=True)
         workers, call_turns, tool_error = set(), {}, [None]
 
         def worker_done(task):

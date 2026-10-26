@@ -49,25 +49,25 @@ class Probe(BaseTool):
 
 @pytest.mark.parametrize("interactive", [True, False])
 @pytest.mark.parametrize("approved", [True, False, None])
-def test_approval_is_independent_of_interactive(interactive, approved):
+def test_nontrading_runs_without_callback_in_every_mode(interactive, approved):
     tool = Probe()
     callback = None if approved is None else Mock(return_value=approved)
     ex = ToolExecutor([tool], interactive=interactive, confirm_callback=callback)
     try:
         result = ex.execute(ToolCall(name=tool.name, arguments='{"path":"example.txt"}'))
-        assert result.success is (approved is True)
-        assert bool(tool.calls) is (approved is True)
+        assert result.success
+        assert tool.calls == [{"path": "example.txt"}]
         if callback:
-            callback.assert_called_once()
-        if approved is not True:
-            assert result.metadata["denied"] and result.metadata["approval_required"]
+            callback.assert_not_called()
+        assert not result.metadata.get("approval_required")
     finally:
         ex.shutdown()
 
 
-def test_explicit_cli_preapproval_and_declared_custom_tool():
+@pytest.mark.parametrize("allow_unconfirmed", [False, True])
+def test_declared_custom_tool_does_not_prompt(allow_unconfirmed):
     tool = Probe(name="custom", confirmation=True)
-    ex = ToolExecutor([tool], allow_unconfirmed=True)
+    ex = ToolExecutor([tool], allow_unconfirmed=allow_unconfirmed)
     try:
         assert ex.execute(ToolCall(name="custom")).success
     finally:
@@ -83,26 +83,27 @@ def test_explicit_cli_preapproval_and_declared_custom_tool():
     ("open_app", {"target": "فایرفاکس"}, False),
 ])
 def test_action_policy(name, params, required):
-    from ultimate_khorshid.security.permissions import approval_required
-    assert approval_required(Probe(name).spec, params) is required
+    from ultimate_khorshid.security.permissions import approval_required, is_mutating
+    spec = Probe(name).spec
+    assert is_mutating(spec, params) is required
+    assert approval_required(spec, params) is (required and name == "mt5_demo")
 
 
-def test_approval_shows_entire_operation_and_rejects_oversized_details():
+def test_large_nontrading_operation_is_not_blocked_by_dialog_limits():
     tool = Probe()
     callback = Mock(return_value=True)
     ex = ToolExecutor([tool], confirm_callback=callback)
     try:
         text = "x" * 500 + "END_OF_OPERATION"
         assert ex.execute(ToolCall(name=tool.name, arguments=json.dumps({"content": text}))).success
-        assert "END_OF_OPERATION" in callback.call_args.args[0]
-        callback.reset_mock()
-        assert not ex.execute(ToolCall(name=tool.name, arguments=json.dumps({"content": "x" * 13000}))).success
+        assert ex.execute(ToolCall(name=tool.name, arguments=json.dumps({"content": "x" * 13000}))).success
+        assert tool.calls == [{"content": text}, {"content": "x" * 13000}]
         callback.assert_not_called()
     finally:
         ex.shutdown()
 
 
-def test_no_retry_of_approved_mutation():
+def test_no_retry_of_nontrading_mutation_without_confirmation():
     tool = Probe()
     tool.execute = Mock(return_value=ToolResult(tool_name=tool.name, content="failed", success=False))
     ex = ToolExecutor([tool], confirm_callback=lambda _: True, retry_on_failure=True, max_retries=3)
@@ -253,8 +254,8 @@ def test_live_tools_share_executor_policy(isolated):
     try:
         result = execute_tool(rt, "khorshid_execute_tool", {
             "tool_name": "file_write", "arguments_json": '{"path":"note.txt"}'})
-        assert not result["success"] and result["approval_required"]
-        assert not probe.calls
+        assert result["success"] and not result["approval_required"]
+        assert probe.calls == [{"path": "note.txt"}]
     finally:
         ex.shutdown()
 
@@ -266,18 +267,19 @@ def test_remote_api_bind_is_rejected():
 
 
 @pytest.mark.parametrize("approved", [False, True])
-def test_real_file_write_through_agent_needs_approval(isolated, approved):
+def test_real_file_write_through_agent_does_not_prompt(isolated, approved):
     from ultimate_khorshid.runtime import KhorshidRuntime
     cfg = KhorshidConfig()
     cfg.storage.db_path = str(isolated / "memory.db")
     path = isolated / "note.txt"
-    rt = KhorshidRuntime(cfg, confirm_callback=lambda _: approved)
+    callback = Mock(return_value=approved)
+    rt = KhorshidRuntime(cfg, confirm_callback=callback)
     try:
         result = rt.ask(f"بنویس در {path}: سلام خورشید")
-        assert path.exists() is approved
-        assert result.tool_results[0].success is approved
-        if approved:
-            assert path.read_text() == "سلام خورشید"
+        assert path.exists()
+        assert result.tool_results[0].success
+        assert path.read_text() == "سلام خورشید"
+        callback.assert_not_called()
     finally:
         rt.executor.shutdown()
 

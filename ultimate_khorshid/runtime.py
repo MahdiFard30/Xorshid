@@ -100,7 +100,9 @@ class KhorshidRuntime:
             skill_txt = self.skills.inject(["persian-assistant"])
         except Exception:
             pass
+        from ultimate_khorshid.security.permissions import DIRECT_ACTION_INSTRUCTION
         sys_prompt = self.persona + (f"\n\n{skill_txt}" if skill_txt else "")
+        sys_prompt += "\n\n" + DIRECT_ACTION_INSTRUCTION
         kwargs = dict(bus=self.bus, temperature=self.cfg.intelligence.temperature,
                       max_tokens=self.cfg.intelligence.max_tokens,
                       system_prompt=sys_prompt, max_turns=self.cfg.agent.max_turns)

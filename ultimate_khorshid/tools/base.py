@@ -47,7 +47,7 @@ class BaseTool(ABC):
 
 
 class ToolExecutor:
-    """اجرای ابزارها با تایم‌اوت، تأییدیه، ایونت و rate-limit ساده."""
+    """اجرای مستقیم ابزارها؛ تأییدهای معاملاتی طبق سیاست فعلی باقی می‌مانند."""
 
     def __init__(self, tools: List[BaseTool], bus: Optional[EventBus] = None, *,
                  interactive: bool = False,
@@ -100,8 +100,8 @@ class ToolExecutor:
         if errors:
             return ToolResult(tool_name=call.name, content="پارامتر نامعتبر: " + "; ".join(errors), success=False)
 
-        # تأییدیه برای ابزارهای خطرناک
-        from ultimate_khorshid.security.permissions import approval_required
+        # Only existing trading actions retain a repeat-confirmation gate.
+        from ultimate_khorshid.security.permissions import approval_required, is_mutating
         if approval_required(tool.spec, params) and not self._allow_unconfirmed:
             ok = self._ask_confirm(tool.spec.name, params)
             if not ok:
@@ -143,13 +143,13 @@ class ToolExecutor:
                 except Exception as e:
                     res = ToolResult(tool_name=call.name, content=f"خطای اجرا: {e}", success=False)
                     timed_out = True
-                should_retry = (not approval_required(tool.spec, params)
+                should_retry = (not is_mutating(tool.spec, params)
                                 and not timed_out and attempts <= self._max_retries
                                 and self._retry_on_failure and not res.success)
                 if not should_retry:
                     break
                 time.sleep(min(0.5 * attempts, 3.0))
-        if (not res.success and not timed_out and not approval_required(tool.spec, params)
+        if (not res.success and not timed_out and not is_mutating(tool.spec, params)
                 and _fb_depth < 2 and call.name in self._fallbacks):
             fb = self._fallbacks[call.name]
             res = self.execute(ToolCall(name=fb, arguments=call.arguments, id=call.id),

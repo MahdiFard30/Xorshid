@@ -172,7 +172,7 @@ def resolve(target):
         # Document opening must not become a second command execution API.
         if path.is_file() and (os.access(path, os.X_OK) or path.suffix.lower() in {
                 '.desktop', '.sh', '.bash', '.py', '.js', '.exe', '.bat', '.cmd', '.ps1', '.appimage'}):
-            raise ValueError('اجرای فایل کد از open_app مجاز نیست؛ از ابزار اجرای کد با تأیید استفاده کن.')
+            raise ValueError('اجرای فایل کد از open_app مجاز نیست؛ از ابزار اجرای کد استفاده کن.')
         opener = shutil.which('xdg-open')
         if not opener:
             raise ValueError('xdg-open در دسترس نیست.')

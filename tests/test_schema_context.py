@@ -79,7 +79,7 @@ def test_invalid_tool_input_never_reaches_approval_or_execution():
             assert not executor.execute(ToolCall(name='schema_probe', arguments=arguments)).success
         assert not calls and not approvals
         assert executor.execute(ToolCall(name='schema_probe', arguments='{"n":2}')).success
-        assert calls == [{'n':2}] and len(approvals) == 1
+        assert calls == [{'n':2}] and not approvals
     finally:
         executor.shutdown()
 
