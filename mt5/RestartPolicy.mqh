@@ -57,6 +57,18 @@ long EntryPauseUntil(long now,long period,long last_exit,int stops,long last_sto
  if(cluster && global_stops>=account_limit && last_global_stop>0 && last_global_stop+lock_bars*period>until) until=last_global_stop+lock_bars*period;
  return until>now ? until:0;
 }
+// Validate data before updating persistent account-risk baselines.
+bool RiskQuoteData(double bid,double ask,long stamp,long stamp_ms,long now,long maximum_age=5) {
+ return KH_FINITE(bid) && KH_FINITE(ask) && bid>0 && ask>=bid
+        && stamp>0 && stamp_ms/1000==stamp && now>=stamp && maximum_age>=0 && now-stamp<=maximum_age;
+}
+bool RiskEquityData(double balance,double credit,double equity,double profit,double swap) {
+ if(!KH_FINITE(balance) || !KH_FINITE(credit) || !KH_FINITE(equity) || !KH_FINITE(profit) || !KH_FINITE(swap)) return false;
+ double difference=equity-(balance+credit+profit+swap);
+ if(difference<0) difference=-difference;
+ double magnitude=equity<0 ? -equity:equity;
+ return difference<=.10+magnitude*1e-8;
+}
 #undef KH_FINITE
 #undef KH_FLOOR
 #undef KH_CEIL
@@ -71,6 +83,14 @@ int RestartPolicy(bool stop_requested,bool active_lease,bool reconciled,long ela
 
 // Shared MQL/C++ schedule logic. Input intervals use broker-server seconds.
 // Merge overlapping sessions before detecting breaks of at least 24 hours.
+bool TradingSessionOffsets(long begin,long finish,long &from,long &to) {
+ // Broker can return true for an empty Saturday row (0 -> 0).
+ // An explicit full day (0 -> 86400) must remain a full day.
+ if(begin<0 || finish<0 || begin==finish) return false;
+ from=begin%86400; to=finish%86400;
+ if(to<=from) to+=86400;
+ return true;
+}
 #ifdef __cplusplus
 #define KH_SESSION_ARRAY(name) long* name
 #else

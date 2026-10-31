@@ -19,7 +19,11 @@ ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 def main():
     from ultimate_khorshid.tools.mt5_multi import SYMBOLS,select,worker
     from ultimate_khorshid.tools.execution_policy import fingerprint
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--refresh-fingerprint',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--refresh-fingerprint',action='store_true')
+    p.add_argument('--preserve-learning',action='store_true',help='Explicitly continue evidence for this approved code revision')
+    p.add_argument('--pause-entries',action='store_true',help='User-approved entry-only pause; preserve active management and learning')
+    a=p.parse_args()
+    if a.preserve_learning and not a.refresh_fingerprint:p.error('--preserve-learning requires --refresh-fingerprint')
     backup=ROOT/'local-backups'/('worker-reload-'+str(time.time_ns()));backup.mkdir()
     config=ROOT/'configs/trading_execution.json';old=config.read_text();data=json.loads(old)
     (backup/'trading_execution.before.json').write_text(old)
@@ -53,7 +57,22 @@ def main():
                     if ack.get('id')!=ident:raise ValueError('Unsettled request; reload cancelled')
                 (backup/(sym+'.state.before.json')).write_text(json.dumps(run,ensure_ascii=False,indent=2)+'\n')
             if a.refresh_fingerprint:
-                for row in data['demo_trials']:row['source_sha256']=fingerprint(ROOT)
+                from ultimate_khorshid.tools.execution_policy import learning_identity
+                from ultimate_khorshid.tools.trading_controls import read
+                controls=read(ROOT);new_source=fingerprint(ROOT)
+                for row in data['demo_trials']:
+                    previous_identity=learning_identity(row,controls)
+                    if a.preserve_learning:
+                        anchor=(row.get('learning_source_sha256') if row.get('learning_source_for_sha256')==row.get('source_sha256') else None) or row['source_sha256']
+                        row.update(learning_source_sha256=anchor,learning_source_for_sha256=new_source)
+                    row['source_sha256']=new_source
+                    if a.preserve_learning and learning_identity(row,controls)!=previous_identity:
+                        raise ValueError('Learning continuation identity mismatch; config not written')
+            if a.pause_entries:
+                data['enabled']=True
+                data['entries_paused']=True
+                data['entry_pause_reason']='User approved temporary entry pause and negative-score correction on 2026-10-29'
+            if a.refresh_fingerprint or a.pause_entries:
                 worker.atomic(config,json.dumps(data,ensure_ascii=False,indent=2)+'\n')
             started=time.time()
             for sym in SYMBOLS:
@@ -74,6 +93,14 @@ def main():
                     time.sleep(.02)
                 else:raise RuntimeError(sym+' reload confirmation timed out')
             (backup/'handover.json').write_text(json.dumps(result,indent=2)+'\n')
+        except BaseException:
+            if a.pause_entries:
+                # Old workers do not know entries_paused. Never let a failed
+                # handover resume one with new-entry authorization enabled.
+                data['enabled']=False
+                data['entries_paused']=True
+                worker.atomic(config,json.dumps(data,ensure_ascii=False,indent=2)+'\n')
+            raise
         finally:
             for sym in paused:
                 try:os.kill(pids[sym],signal.SIGCONT)

@@ -60,11 +60,13 @@ def test_open_positions_never_score(tmp_path):
     assert model.observe({'1':outcome()},open_ids={1})==0
 
 
-def test_entry_context_not_exit_market_drives_score_and_sparse_data_do_not_change_selection(tmp_path):
+def test_entry_context_not_exit_market_drives_score_and_sparse_evidence_is_shrunk(tmp_path):
     model=ContextModel(tmp_path/'model.sqlite',7)
     up=describe(bars(),utc=100000,spread=.02); down=describe(bars(trend=-1),utc=100000,spread=.02)
     model.observe({str(i):outcome(str(i),context=up) for i in range(19)})
-    assert model.assess(NAMES[0],up,1)['adjustment']==0
+    sparse=model.assess(NAMES[0],up,1)
+    assert -.5<sparse['adjustment']<0
+    assert sparse['reason']=='low_sample_context_adjustment' and not sparse['paused']
     model.observe({'19':outcome('19',context=up)})
     assert model.assess(NAMES[0],up,1)['adjustment']<0
     assert model.assess(NAMES[0],down,1)['samples']==0

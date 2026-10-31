@@ -14,7 +14,7 @@ SOURCES=('demo_lab.py','execution_model.py','exit_rules.py','mt5_entry_policy.py
          'managed_exits.py','portfolio_policy.py','position_scaling.py','execution_policy.py',
          'mt5_multi_worker.py','research_observer.py','headline_research.py','news_analysis.py',
          'trade_memory.py','market_learning.py','demo_learning.py','entry_protections.py',
-         'mt5_recovery.py','mt5_news_calendar.py','news_grounding.py','trading_controls.py','history_archive.py')
+         'mt5_recovery.py','mt5_news_calendar.py','news_grounding.py','trading_controls.py','history_archive.py','learning_evidence.py')
 
 
 def fingerprint(root):
@@ -24,6 +24,18 @@ def fingerprint(root):
     for name in ('KhorshidMultiTrader.mq5','RestartPolicy.mqh'):
         digest.update(name.encode());digest.update((root/'mt5'/name).read_bytes())
     return digest.hexdigest()
+
+
+def learning_identity(row, controls):
+    # Cosmetic config metadata does not alter the identity; every execution option does.
+    effective={k:v for k,v in row.items() if k not in ('learning_regime','experiment_id',
+        'learning_source_sha256','learning_source_for_sha256')}
+    # Explicit, code-bound continuation preserves evidence for an approved reload.
+    # Execution authorization still checks the actual source_sha256 independently.
+    if row.get('learning_source_for_sha256')==row.get('source_sha256') and row.get('learning_source_sha256'):
+        effective['source_sha256']=row['learning_source_sha256']
+    raw=json.dumps({'trial':effective,'controls':controls,'learner':3},sort_keys=True,allow_nan=False)
+    return 'v3-'+hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
 def load(root):
@@ -96,8 +108,9 @@ def authorize(root,snapshot,strategy=None,now=None):
             'selection_mode':'adaptive_demo' if adaptive else 'fixed','allowed_strategies':allowed,
             'profit_exit_mode':row.get('profit_exit_mode','standard'),
             'entry_cap_cash':cash if limited else None,'entry_risk_limit_enabled':limited,
+            'entries_paused':policy.get('entries_paused') is True,
             'experiment_id':row.get('experiment_id'),
-            'learning_regime':row.get('learning_regime'),
+            'learning_regime':learning_identity(row,controls),
             'max_positions':controls['max_positions'],
             'code_revision':row.get('source_sha256'),
             'reason':'User-authorized unvalidated DEMO trial; adaptive selection and bounded risk' if adaptive else 'User-authorized unvalidated DEMO trial; fixed strategy and bounded risk',
@@ -137,6 +150,11 @@ def select(root,snapshot,signals,context=None,now=None,learner=None):
                     'waiting_for_trend':False,'reason':'Adaptive demo requires persistent experience'}
         learner.set_regime(result.get('learning_regime'))
         ranking=learner.rank(signals,context=context,allowed=result['allowed_strategies'])
+        if load(root).get('entries_paused') is True:
+            return {**result,**ranking,'allowed':False,'status':'entries_paused',
+                    'paused_candidate':ranking['selected'],'selected':None,
+                    'reason':'User-approved temporary entry pause; learning and position exits remain active',
+                    'exploration_used':False,'waiting_for_trend':False}
         return {**result,**ranking,'approved_strategy':None,'waiting_for_trend':False,
                 'exploration_used':bool(ranking['selected']),
                 'utc':time.time() if now is None else now}
@@ -157,6 +175,11 @@ def select(root,snapshot,signals,context=None,now=None,learner=None):
 
 def constrain(plan,root,snapshot,now=None,advice=None):
     if plan.get('action')!='open':return plan
+    if load(root).get('entries_paused') is True:
+        return {'status':'entries_paused','reason':'User-approved temporary entry pause; exits remain active'}
+    from ultimate_khorshid.tools.trading_controls import read, revision
+    if snapshot.get('controls_revision')!=revision(read(root)):
+        return {'status':'research_only','reason':'Native/Python controls mismatch; publish controls before entry'}
     permission=authorize(root,snapshot,plan.get('strategy'),now)
     if not permission['allowed']:return {'status':permission['status'],'reason':permission['reason']}
     if advice is not None and advice.get('news_mode')!='report_only':
@@ -186,5 +209,6 @@ def constrain(plan,root,snapshot,now=None,advice=None):
 def require(root,snapshot,strategy=None):
     permission=authorize(root,snapshot,strategy)
     if not permission['allowed']:raise ValueError(permission['reason'])
+    if load(root).get('entries_paused') is True:raise ValueError('User-approved temporary entry pause')
     if len(snapshot.get('positions',[]))>=permission.get('max_positions',1):raise ValueError('Additional positions are not approved')
     return permission

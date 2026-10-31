@@ -18,7 +18,7 @@ def new_book(equity=1.0):
 
 
 def step(book, bar, signal, atr, point, entry_ok=True, cost_multiplier=1.0,
-         risk_fraction=.0025, profile=None, allow_entry=True, force_close=False, stop_atr=STOP_ATR):
+         risk_fraction=.0025, profile=None, allow_entry=True, force_close=False, stop_atr=STOP_ATR, controls=None):
     """One new closed candle, with the signal/ATR known BEFORE its open.
 
     Staged profiles must be timestamped before entry; unknown historical news
@@ -30,8 +30,9 @@ def step(book, bar, signal, atr, point, entry_ok=True, cost_multiplier=1.0,
         raise ValueError('Paper risk cannot exceed the live per-entry ceiling')
     if not finite(stop_atr) or not .5<=stop_atr<=4:
         raise ValueError('Offline stop hypothesis must be between 0.5 and 4 ATR')
-    parameters=book.setdefault('simulation_parameters',{'stop_atr':stop_atr})
-    if parameters!={'stop_atr':stop_atr}:
+    controls=dict(controls or {})
+    parameters=book.setdefault('simulation_parameters',{'stop_atr':stop_atr,'controls':controls})
+    if parameters!={'stop_atr':stop_atr,'controls':controls}:
         raise ValueError('Cannot change stop hypothesis inside an existing paper book')
     for key, value in new_book(book.get('equity', 1.0)).items():
         book.setdefault(key, value)
@@ -100,16 +101,16 @@ def step(book, bar, signal, atr, point, entry_ok=True, cost_multiplier=1.0,
         # A gap through SL precedes the strategy's next-bar exit request.
         if p['side']*(op-p['stop']) <= 0:
             realize(op, p['remaining'], 'gap_stop')
-        elif (signal == -p['side'] or p['bars'] >= MAX_HOLD_BARS
+        elif (signal == -p['side'] or p['bars'] >= controls.get('max_hold_bars',MAX_HOLD_BARS)
               or failed_thesis(signal, p['side'], p['bars'], p['side']*(op-p['entry'])/p['distance'])):
             realize(op, p['remaining'], 'opposite_signal_failed_thesis_or_timeout')
     period = bar.get('period_seconds')
     protection_clear = (assess({'login': 1, 'symbol': 'paper', 'generated_utc': bar['time'],
-        'broker_utc_offset_seconds': 0, 'period_seconds': period},
+        'broker_utc_offset_seconds': 0, 'period_seconds': period, 'trading_controls':controls},
         {str(i): row for i,row in enumerate(book['recent_closes'])})['allow_entry'] if period else True)
     if p is None and not occupied and protection_clear and allow_entry and entry_ok and signal in (-1, 1) and finite(atr) and atr > point*10:
         distance = stop_atr*atr
-        if spread <= distance*.1:
+        if spread <= distance*controls.get('spread_atr_fraction',.1):
             details = profile if isinstance(profile, dict) else {}
             strong = (details.get('mode') == 'staged' and finite(details.get('known_at_server'))
                       and details['known_at_server'] <= bar['time']

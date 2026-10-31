@@ -141,7 +141,7 @@ class TradeMemory:
                 (snapshot['login'],snapshot['symbol'],snapshot['period'],run['id'],snapshot['bars'][-1]['time'])).fetchone()
             if old:self.archive.save('decision',identity,json.loads(old[0]),labels,seed=True)
             self.archive.save('decision',identity,run['entry_decision'],labels)
-            con.execute('INSERT OR IGNORE INTO decisions VALUES (?,?,?,?,?,?)',
+            con.execute('INSERT OR REPLACE INTO decisions VALUES (?,?,?,?,?,?)',
                         (snapshot['login'],snapshot['symbol'],snapshot['period'],run['id'],
                          snapshot['bars'][-1]['time'],encode(run['entry_decision'])))
 

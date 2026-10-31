@@ -1,5 +1,6 @@
 """Persistent forward-paper experience and demo exploration selection. No model training."""
 import json
+import fcntl
 import math
 import os
 import sqlite3
@@ -44,9 +45,10 @@ class Experience:
             self.data['books']={}
             self.data['exit_policy_version']=POLICY_VERSION
         self.data.setdefault('verified_seen',[])
-        self.data['learning_policy_version']=2
+        self.data['learning_policy_version']=3
         self.context_model=None
         self.regime=None
+        self.controls={}
         self.stats=self.data['stats']
     def set_regime(self,regime):
         self.regime=regime or None
@@ -57,6 +59,8 @@ class Experience:
                 regimes[self.regime]={'stats':{k:{field:0 for field in st} for k,st in self.data['stats'].items()},
                                       'created_utc':time.time(),'note':'Separate policy evidence; previous history retained'}
             self.stats=regimes[self.regime]['stats']
+        from ultimate_khorshid.tools.learning_evidence import ensure_windows
+        for st in self.stats.values():ensure_windows(st)
         self.context_model=None
     def context_path(self):
         suffix='.'+hashlib.sha256(self.regime.encode()).hexdigest()[:12] if self.regime else ''
@@ -77,10 +81,14 @@ class Experience:
         # Full history append-only; compact state retains the latest 100 entries.
         self.path.parent.mkdir(parents=True,exist_ok=True)
         with self.path.with_suffix('.jsonl').open('a',encoding='utf-8') as f:
+            fcntl.flock(f,fcntl.LOCK_EX)
             f.write(json.dumps(event,ensure_ascii=False,allow_nan=False)+'\n')
+            f.flush();os.fsync(f.fileno())
         self.data['events']=self.data['events'][-100:]
     def save(self): atomic(self.path,self.data)
     def activate(self,s):
+        self.controls=dict(s.get('trading_controls',{}))
+        self.data['effective_controls']=self.controls
         for k,b in self.data.get('books',{}).items():
             if b.get('position'): self.event({'kind':'paper_abandoned_on_restart','strategy':k,'reason':'No continuous observation across restart; not scored'})
         self.data['books']={k:new_book(self.data.get('books',{}).get(k,{}).get('equity',100000.)) for k in NAMES}
@@ -95,56 +103,55 @@ class Experience:
         # Bounded EWMA limits the effect of a single windfall or bad fill; recent evidence matters more.
         clipped=max(-3.,min(3.,r)); alpha=1/min(st[key],20)
         st[avg]+=alpha*(clipped-st[avg])
+        from ultimate_khorshid.tools.learning_evidence import ensure_windows
+        ensure_windows(st)
+        if kind in ('paper','verified_demo'):
+            st[kind+'_window']=(st[kind+'_window']+[{'r':r,'utc':time.time()}])[-60:]
         if kind in ('demo','verified_demo'): st[kind+'_net']+=net
         return before,self.score(strategy,explore=False)
     def score(self,k,explore=True):
-        s=self.stats[k]; pn=min(s['paper_n'],20); dn=min(s['verified_demo_n'],20)
-        evidence=(pn*s['paper_mean_r']+3*dn*s['verified_demo_mean_r'])/(pn+3*dn) if pn+dn else 0.
+        from ultimate_khorshid.tools.learning_evidence import assess
+        result=assess(self.stats[k])
         total=sum(x['attempts'] for x in self.stats.values())
-        bonus=.35*math.sqrt(math.log(2+total)/(1+s['attempts'])) if explore else 0.
-        return evidence+bonus
+        bonus=min(.35,.2*math.sqrt(math.log(2+total)/(1+self.stats[k]['attempts']))) if explore else 0.
+        return result['evidence_score']+bonus
     def rank(self,signals,context=None,news_adjustments=None,allowed=None):
+        from ultimate_khorshid.tools.learning_evidence import assess
         candidates=[k for k in NAMES if (allowed is None or k in allowed) and signals.get(k,[0])[-1] in (-1,1)]
         try:
-            assessments={k:self.contextual().assess(k,context,signals[k][-1]) for k in candidates} if context else {}
+            contexts={k:self.contextual().assess(k,context,signals[k][-1]) for k in candidates} if context else {}
             self.data.pop('context_error',None)
         except (sqlite3.Error,OSError,ValueError) as exc:
-            assessments={}
-            self.data['context_error']=type(exc).__name__+': '+str(exc)
-        paused=[k for k in candidates if assessments.get(k,{}).get('paused')]
-        candidates=[k for k in candidates if k not in paused]
-        news_adjustments=news_adjustments or {}
-        raw_scores={k:self.score(k)+assessments.get(k,{}).get('adjustment',0)+max(-.15,min(.15,news_adjustments.get(k,0))) for k in candidates}
-        # Exploration orders eligible candidates; it is not profit evidence.
-        # Keep it in the ranking, but do not let it rescue negative evidence.
-        evidence_scores={k:self.score(k,explore=False)+assessments.get(k,{}).get('adjustment',0)+max(-.15,min(.15,news_adjustments.get(k,0))) for k in candidates}
-        scores={k:round(value,6) for k,value in raw_scores.items()}
-        evidence_rejected=[k for k in candidates if evidence_scores[k]<0]
-        score_rejected=[k for k in candidates if raw_scores[k]<0 or evidence_scores[k]<0]
-        eligible=[k for k in candidates if k not in score_rejected]
+            contexts={};self.data['context_error']=type(exc).__name__+': '+str(exc)
+        evidence={k:assess(self.stats[k]) for k in candidates}
+        paused=[k for k in candidates if contexts.get(k,{}).get('paused')]
+        scores={k:self.score(k)+contexts.get(k,{}).get('adjustment',0) for k in candidates}
+        before_exploration={k:self.score(k,False)+contexts.get(k,{}).get('adjustment',0) for k in candidates}
+        # Exploration ranks eligible entries; it cannot rescue negative evidence.
+        rejected={k:(["negative_evidence_before_exploration"] if before_exploration[k]<0 else [])
+                     +(["negative_final_score"] if scores[k]<0 else [])
+                     +(["invalid_score"] if not math.isfinite(before_exploration[k]) or not math.isfinite(scores[k]) else [])
+                     +(["quarantined_evidence"] if not evidence[k]['eligible'] else [])
+                     +(["context_pause"] if k in paused else []) for k in candidates}
+        eligible=[k for k in candidates if not rejected[k]]
         selected=max(eligible,key=lambda k:(scores[k],-self.stats[k]['attempts'],-NAMES.index(k))) if eligible else None
-        details={k:{'paper_results':self.stats[k]['paper_n'],'demo_results':self.stats[k]['verified_demo_n'],'legacy_demo_results':self.data['stats'][k]['demo_n'],'experience_score':round(self.score(k,False),6),'exploration_bonus':round(self.score(k)-self.score(k,False),6),'total_score':scores[k]} for k in candidates}
-        for k in candidates:
-            pn=min(self.stats[k]['paper_n'],20);dn=3*min(self.stats[k]['verified_demo_n'],20);total=pn+dn
-            details[k].update(paper_mean_r=self.stats[k]['paper_mean_r'],verified_demo_mean_r=self.stats[k]['verified_demo_mean_r'],
-                unrounded_total_score=raw_scores[k],entry_score_eligible=k not in score_rejected,
-                evidence_score=evidence_scores[k],
-                entry_score_rejections=(["negative_evidence_without_exploration"] if evidence_scores[k]<0 else [])+
-                    (["negative_final_score"] if raw_scores[k]<0 else []),
-                paper_weight=pn/total if total else 0,verified_demo_weight=dn/total if total else 0,
-                context_adjustment=assessments.get(k,{}).get('adjustment',0),
-                news_adjustment=max(-.15,min(.15,news_adjustments.get(k,0))))
-        d={'score_details':details,'learning_regime':self.regime,'utc':time.time(),'candidates':scores,'selected':selected,
-           'score_rejected':score_rejected,'entry_score_floor':0.,
-           'evidence_rejected':evidence_rejected,'evidence_score_floor':0.,
-           'market_context':context,'context_assessments':assessments,'context_paused':paused,
-           'context_error':self.data.get('context_error'),'news_adjustments':news_adjustments,
-           'reason':'experience score + exploration bonus + bounded context evidence' if selected and context
-                    else 'experience score + exploration bonus among current signals' if selected
-                    else 'No non-negative strategy evidence without exploration; entry declined' if evidence_rejected
-                    else 'No non-negative final strategy score; entry declined' if score_rejected
-                    else 'Negative context evidence paused all current signals' if paused else 'No closed-bar entry signal'}
-        return d
+        details={k:{**evidence[k],'paper_results':self.stats[k]['paper_n'],
+            'demo_results':self.stats[k]['verified_demo_n'],'legacy_demo_results':self.data['stats'][k]['demo_n'],
+            'experience_score':self.score(k,False),'exploration_bonus':self.score(k)-self.score(k,False),
+            'context_adjustment':contexts.get(k,{}).get('adjustment',0),'total_score':scores[k],
+            'evidence_before_exploration':before_exploration[k],'entry_rejection_reasons':rejected[k],
+            'unrounded_total_score':scores[k],
+            'entry_score_eligible':k in eligible,'news_adjustment':0} for k in candidates}
+        return {'score_details':details,'learning_regime':self.regime,'utc':time.time(),
+            'candidates':scores,'selected':selected,'market_context':context,
+            'context_assessments':contexts,'context_paused':paused,'context_error':self.data.get('context_error'),
+            'score_rejected':[k for k in candidates if k not in eligible],
+            'evidence_rejected':[k for k in candidates if not evidence[k]['eligible'] or before_exploration[k]<0],
+            'negative_evidence_rejected':[k for k in candidates if before_exploration[k]<0],
+            'news_adjustments':{},'risk_multiplier':evidence[selected]['risk_multiplier'] if selected else 0,
+            'selection_stage':evidence[selected]['stage'] if selected else 'no_entry',
+            'reason':('Adaptive demo: '+evidence[selected]['stage']) if selected else
+                'Adaptive entry declined: negative evidence, negative score or existing quarantine/context pause' if candidates else 'No closed-bar entry signal'}
     def choose(self,signals,context=None,news_adjustments=None):
         d=self.rank(signals,context,news_adjustments)
         self.data['decisions']=(self.data['decisions']+[d])[-30:]; self.event({'kind':'decision',**d}); self.save()
@@ -164,7 +171,7 @@ class Experience:
             i=unseen[0]; bar=bars[i]
             for name in NAMES:
                 book=self.data['books'][name]
-                events=step(book,{**bar,'period_seconds':self.data['period_seconds']},signals[name][i-1],atr[i-1],point)
+                events=step(book,{**bar,'period_seconds':self.data['period_seconds']},signals[name][i-1],atr[i-1],point,controls=self.controls)
                 for event in events:
                     if event['kind']=='close':
                         before,after=self.reward(name,'paper',event['r'])
@@ -211,7 +218,7 @@ class Experience:
             'context_learning':context_summary,
             'demo_closed_learned':sum(v['verified_demo_n'] for v in self.stats.values()),
             'legacy_demo_closed_approximate':sum(v['demo_n'] for v in self.data['stats'].values()),
-            'learning_policy_version':2,'exit_policy_version':POLICY_VERSION,
+            'learning_policy_version':3,'exit_policy_version':POLICY_VERSION,
             'archived_policy_demo_closed':sum(sum(st.get('verified_demo_n',0) for st in archive['stats'].values()) for archive in self.data.get('policy_archives',[])),
             'paper_open':sum(bool(b['position']) for b in self.data['books'].values()),'stats':self.stats,
             'latest_events':self.data['events'][-12:],'latest_decision':self.data['decisions'][-1] if self.data['decisions'] else None,

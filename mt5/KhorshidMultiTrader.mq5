@@ -1,5 +1,5 @@
 #property strict
-#property version "3.51"
+#property version "3.53"
 #property description "DEMO ONLY: Khorshid deterministic strategy executor, SL/TP, lease and stop control."
 #include <Trade/Trade.mqh>
 #include "RestartPolicy.mqh"
@@ -11,6 +11,8 @@ string BASE;
 string key;
 string last_note="Idle: waiting for trainer";
 bool halted=false;
+bool account_data_valid=false;
+string account_data_note="Account data not checked";
 bool owns=false;
 long initial_login=0;
 string executor_instance="";
@@ -68,11 +70,8 @@ void UpdateWeeklySchedule() {
   for(uint index=0;index<32;index++) {
    datetime begin=0,finish=0;
    if(!SymbolInfoSessionTrade(_Symbol,(ENUM_DAY_OF_WEEK)parts.day_of_week,index,begin,finish)) break;
-   MqlDateTime b,e; TimeToStruct(begin,b); TimeToStruct(finish,e);
-   long from=b.hour*3600+b.min*60+b.sec;
-   long to=e.hour*3600+e.min*60+e.sec;
-   // Midnight end and overnight sessions belong to the following date.
-   if(to<=from) to+=86400;
+   long from=0,to=0;
+   if(!TradingSessionOffsets((long)begin,(long)finish,from,to)) continue;
    starts[count]=(long)date+from; ends[count]=(long)date+to; count++;
   }
  }
@@ -254,9 +253,33 @@ void ManagePositions() {
   if(!modified || (trade.ResultRetcode()!=TRADE_RETCODE_DONE && trade.ResultRetcode()!=TRADE_RETCODE_NO_CHANGES)) last_note="Trailing SL pending: "+trade.ResultRetcodeDescription();
  }
 }
-void RiskGuard() {
+bool RiskGuard() {
+ account_data_valid=false;
+ account_data_note="Waiting for coherent account and fresh quote data";
+ if(!TerminalInfoInteger(TERMINAL_CONNECTED)) return false;
+ MqlTick tick; long now=(long)TimeTradeServer();
+ // Flat account equity does not depend on this chart receiving a new tick.
+ // Every exposed symbol is checked below; every entry checks its own quote.
+ double balance=AccountInfoDouble(ACCOUNT_BALANCE),credit=AccountInfoDouble(ACCOUNT_CREDIT),profits=0,swaps=0;
+ int count=PositionsTotal();
+ for(int i=0;i<count;i++) {
+  ulong ticket=PositionGetTicket(i); if(ticket==0) return false;
+  string symbol=PositionGetString(POSITION_SYMBOL);
+  if(!SymbolInfoTick(symbol,tick) || !RiskQuoteData(tick.bid,tick.ask,(long)tick.time,tick.time_msc,now)) return false;
+  bool buy=PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY;
+  double price=buy ? tick.bid:tick.ask,calculated=0;
+  double profit=PositionGetDouble(POSITION_PROFIT),swap=PositionGetDouble(POSITION_SWAP);
+  if(!OrderCalcProfit(buy ? ORDER_TYPE_BUY:ORDER_TYPE_SELL,symbol,PositionGetDouble(POSITION_VOLUME),
+                     PositionGetDouble(POSITION_PRICE_OPEN),price,calculated)) return false;
+  if(!MathIsValidNumber(profit) || !MathIsValidNumber(swap) || !MathIsValidNumber(calculated)
+     || MathAbs(calculated-profit)>.10+MathAbs(calculated)*1e-8) return false;
+  profits+=profit; swaps+=swap;
+ }
  double eq=AccountInfoDouble(ACCOUNT_EQUITY);
- if(eq<=0) { halted=true; return; }
+ if(count!=PositionsTotal() || balance!=AccountInfoDouble(ACCOUNT_BALANCE)
+    || !RiskEquityData(balance,credit,eq,profits,swaps)) return false;
+ account_data_valid=true; account_data_note="Account and quote data coherent";
+ if(eq<=0) { halted=true; WriteFile(BASE+"stop.flag","Risk limit reached"); last_note="Stopped: verified nonpositive equity"; return true; }
  string peak=risk_key+"peak";
  if(!GlobalVariableCheck(peak)) GlobalVariableSet(peak,eq);
  if(eq>GlobalVariableGet(peak)) GlobalVariableSet(peak,eq);
@@ -264,6 +287,7 @@ void RiskGuard() {
  if(!GlobalVariableCheck(daily)) GlobalVariableSet(daily,eq);
  halted=(eq<=GlobalVariableGet(peak)*(1-control_drawdown) || eq<=GlobalVariableGet(daily)*(1-control_daily));
  if(halted) { WriteFile(BASE+"stop.flag","Risk limit reached"); last_note="Stopped: daily 2% or peak drawdown 10% limit"; }
+ return true;
 }
 bool IdentifierOpen(long identifier) {
  for(int i=0;i<PositionsTotal();i++) if(PositionGetTicket(i)>0 && PositionGetInteger(POSITION_IDENTIFIER)==identifier) return true;
@@ -398,7 +422,7 @@ void ProcessRequest(string token) {
  if(OwnCount()>=PositionLimit() || BlockingPositions()>0 || OrdersTotal()>0) { Ack(id,"rejected","Existing exposure blocks this symbol"); return; }
  long pause_until=EntryGuard();
  if(pause_until!=0) { Ack(id,"rejected",pause_until<0 ? "Entry protection history unavailable":"Entry cooldown/stop-loss cluster pause until "+TimeToString((datetime)pause_until)); return; }
- MqlTick tick; if(!SymbolInfoTick(_Symbol,tick) || tick.bid<=0 || tick.ask<tick.bid || TimeTradeServer()-tick.time>120 || TimeTradeServer()<tick.time) { Ack(id,"rejected","Missing/stale quote"); return; }
+ MqlTick tick; if(!SymbolInfoTick(_Symbol,tick) || !RiskQuoteData(tick.bid,tick.ask,(long)tick.time,tick.time_msc,(long)TimeTradeServer(),120)) { Ack(id,"rejected","Missing/stale quote"); return; }
  double point=SymbolInfoDouble(_Symbol,SYMBOL_POINT), ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
  if(ts<=0 || point<=0 || (tick.ask-tick.bid)>dist*control_spread) { Ack(id,"rejected","Spread too large"); return; }
  double price=(direction>0 ? tick.ask:tick.bid);
@@ -434,7 +458,7 @@ void ProcessRequest(string token) {
 }
 void Publish() {
  bool demo=Demo(); MqlTick tick; ZeroMemory(tick); SymbolInfoTick(_Symbol,tick);
- string s="{\"executor_version\":9,\"ea_version\":\"3.51\",\"controls_revision\":"+Q(controls_revision)+",\"cooldown_bars\":"+(string)control_cooldown+",\"stop_cluster_enabled\":"+B(control_cluster)+",\"exit_policy_version\":2,\"adaptive_risk_schema\":1,\"risk_policy_version\":2,\"trade_memory_schema\":1,\"executor_instance\":"+Q(executor_instance)+",\"schema\":2,\"demo\":"+B(demo)+",\"connected\":"+B((bool)TerminalInfoInteger(TERMINAL_CONNECTED))+
+ string s="{\"executor_version\":9,\"ea_version\":\"3.53\",\"account_data_valid\":"+B(account_data_valid)+",\"account_data_note\":"+Q(account_data_note)+",\"controls_revision\":"+Q(controls_revision)+",\"cooldown_bars\":"+(string)control_cooldown+",\"stop_cluster_enabled\":"+B(control_cluster)+",\"exit_policy_version\":2,\"adaptive_risk_schema\":1,\"risk_policy_version\":2,\"trade_memory_schema\":1,\"executor_instance\":"+Q(executor_instance)+",\"schema\":2,\"demo\":"+B(demo)+",\"connected\":"+B((bool)TerminalInfoInteger(TERMINAL_CONNECTED))+
  ",\"generated_utc\":"+(string)(long)TimeGMT()+",\"algo_enabled\":"+B(CanTrade())+",\"halted\":"+B(halted)+",\"stopped\":"+B(FileIsExist(BASE+"stop.flag"))+
  ",\"note\":"+Q(last_note)+",\"symbol\":"+Q(_Symbol)+",\"period\":"+(string)(int)_Period+",\"period_seconds\":"+(string)PeriodSeconds(_Period);
  s+=",\"max_positions\":"+(string)PositionLimit()+",\"entry_window_seconds\":"+(string)EntryWindow()+",\"bar_age_seconds\":"+(string)(long)(TimeTradeServer()-iTime(_Symbol,_Period,0));
@@ -525,7 +549,8 @@ void OnTimer() {
  LoadControls();
  if(!Demo() || AccountInfoInteger(ACCOUNT_LOGIN)!=initial_login) { halted=true; last_note="Blocked: account is no longer DEMO"; Publish(); return; }
  GlobalVariableSet(owner_key+"time",(double)TimeGMT());
- RiskGuard(); UpdateWeeklySchedule(); string token;
+ if(!RiskGuard()) { last_note=account_data_note; Publish(); return; }
+ UpdateWeeklySchedule(); string token;
  bool pending=WeeklyExitPending(weekly_liquidation_pending,weekly_state,(bool)TerminalInfoInteger(TERMINAL_CONNECTED),OwnCount());
  if(pending!=weekly_liquidation_pending) {
   weekly_liquidation_pending=pending;

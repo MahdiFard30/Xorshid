@@ -24,6 +24,7 @@ def calendar_binary(tmp_path_factory):
     source = folder / "calendar.cpp"
     source.write_text('#include <iostream>\n#include <cstdlib>\n#include "' + str(header) + '"\n'
                       'int main(int n,char** v){if(std::string(v[1])=="pending"){std::cout<<WeeklyExitPending(atoi(v[2]),atoi(v[3]),atoi(v[4]),atoi(v[5]));return 0;} '
+                      'if(std::string(v[1])=="offsets"){long a=0,b=0;bool valid=TradingSessionOffsets(atol(v[2]),atol(v[3]),a,b);std::cout<<valid<<" "<<a<<" "<<b;return 0;} '
                       'long s[1024],e[1024],close=0,open=0; '
                       'int count=(n-2)/2; for(int i=0;i<count;i++){s[i]=atol(v[2+i*2]);e[i]=atol(v[3+i*2]);}'
                       'std::cout<<WeeklyClosePolicy(atol(v[1]),s,e,count,close,open)<<" "<<close<<" "<<open;}')
@@ -110,3 +111,31 @@ def test_unfinished_exit_survives_reopening_and_disconnect(calendar_binary,pendi
     result=subprocess.run([str(calendar_binary),'pending',*map(str,map(int,(pending,state,connected,positions)))],
                           check=True,capture_output=True,text=True)
     assert bool(int(result.stdout)) is expected
+
+
+@pytest.mark.parametrize('begin,finish,expected',[
+    (0,0,(0,0,0)),(3600,3600,(0,0,0)),
+    (0,86400,(1,0,86400)),(0,82800,(1,0,82800)),
+    (82800,7200,(1,82800,93600)),(-1,0,(0,0,0)),
+])
+def test_empty_rows_are_not_full_days_but_real_full_days_remain(calendar_binary,begin,finish,expected):
+    raw=subprocess.check_output([str(calendar_binary),'offsets',str(begin),str(finish)],text=True)
+    assert tuple(map(int,raw.split()))==expected
+
+
+def test_actual_gold_saturday_empty_row_pauses_from_friday_and_reopens_monday(calendar_binary):
+    intervals=[]
+    # Actual broker rows: Mon-Fri 0->82800, Sat 0->0, Sun absent.
+    for day in range(9):
+        weekday=day%7
+        if weekday==6:continue
+        begin,finish=(0,0) if weekday==5 else (0,82800)
+        raw=subprocess.check_output([str(calendar_binary),'offsets',str(begin),str(finish)],text=True)
+        valid,a,b=map(int,raw.split())
+        if valid:intervals.append((MONDAY+day*DAY+a,MONDAY+day*DAY+b))
+    friday_close=MONDAY+4*DAY+82800;reopen=MONDAY+7*DAY
+    assert evaluate(calendar_binary,friday_close-601,intervals)[0]==0
+    assert evaluate(calendar_binary,friday_close-600,intervals)==(1,friday_close,reopen)
+    assert evaluate(calendar_binary,MONDAY+5*DAY+12*3600,intervals)==(1,friday_close,reopen)
+    assert evaluate(calendar_binary,reopen-1,intervals)[0]==1
+    assert evaluate(calendar_binary,reopen,intervals)[0]==0

@@ -124,13 +124,13 @@ class ContextModel:
     def assess(self, strategy, context, direction):
         with self.connect() as con:
             rows = con.execute('''SELECT reward FROM outcomes WHERE account=? AND strategy=?
-                AND direction=? AND bucket=? ORDER BY recorded DESC LIMIT 100''',
-                (self.account, strategy, direction, self.bucket(context))).fetchall()
+                AND direction=? AND bucket=? AND recorded>=? ORDER BY recorded DESC LIMIT 100''',
+                (self.account, strategy, direction, self.bucket(context),time.time()-30*86400)).fetchall()
             scope = 'full_context'
             if len(rows) < MIN_SAMPLES:
                 rows = con.execute('''SELECT reward FROM outcomes WHERE account=? AND strategy=?
-                    AND direction=? AND trend=? ORDER BY recorded DESC LIMIT 100''',
-                    (self.account, strategy, direction, context['trend'])).fetchall()
+                    AND direction=? AND trend=? AND recorded>=? ORDER BY recorded DESC LIMIT 100''',
+                    (self.account, strategy, direction, context['trend'],time.time()-30*86400)).fetchall()
                 scope = 'trend_and_direction'
         values = [r[0] for r in rows]
         n = len(values)
@@ -139,11 +139,12 @@ class ContextModel:
         # This is a conservative operational heuristic, not an IID statistical proof.
         upper = average+1.96*se if se is not None else None
         pause = n >= PAUSE_SAMPLES and upper < 0 and mean(values[:20]) < 0
-        adjustment = max(-.5, min(.5, average*n/(n+30))) if n >= MIN_SAMPLES else 0.
+        adjustment = max(-.5, min(.5, average*n/(n+30))) if n else 0.
         return {'samples': n, 'scope': scope, 'mean_r': average, 'upper_mean_r_heuristic': upper,
                 'adjustment': adjustment, 'paused': pause,
                 'reason': 'persistent_negative_context_evidence' if pause else
-                          'insufficient_context_evidence' if n < MIN_SAMPLES else 'context_adjustment'}
+                          'insufficient_context_evidence' if not n else
+                          'low_sample_context_adjustment' if n < MIN_SAMPLES else 'context_adjustment'}
 
     @staticmethod
     def summary(path, account):

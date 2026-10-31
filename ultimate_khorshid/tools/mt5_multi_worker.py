@@ -88,6 +88,8 @@ def snapshot():
     if s.get('schema')!=2 or s.get('demo') is not True: raise ValueError('فقط حساب DEMO پذیرفته می‌شود.')
     if not -5<=time.time()-s.get('generated_utc',0)<=15: raise SnapshotUnavailable('زمان داده نامعتبر است.')
     if s.get('connected') is not True: raise SnapshotUnavailable('متاتریدر به کارگزار وصل نیست.')
+    if s.get('account_data_valid') is False:
+        raise SnapshotUnavailable('دادهٔ حساب یا قیمت معتبر نیست؛ منتظر دادهٔ هماهنگ، بدون تغییر حد ریسک.')
     if not isinstance(s.get('bars'),list) or len(s['bars'])<1000:
         raise SnapshotUnavailable('تاریخچهٔ چارت پس از راه‌اندازی هنوز آماده نیست؛ منتظر بارگذاری حداقل ۱۰۰۰ کندل.')
     for k in ('balance','equity','point','bid','ask','tick_age_seconds','bar_age_seconds','entry_window_seconds','max_positions'):
@@ -238,7 +240,7 @@ def start():
         finally: log.close()
         for _ in range(25):
             if running(): return {'status':'starting','pid':proc.pid,'execution_policy':permission,
-                'summary':'کارگر دمو شروع شد؛ اجرای سفارش هنوز تأیید نشده است. استراتژی ثابت و مجوز زمان‌دار اجرا بررسی می‌شود.'}
+                'summary':'کارگر دمو شروع شد؛ اجرای سفارش هنوز تأیید نشده است. انتخاب تطبیقی و مجوز اجرای دمو بررسی می‌شود.'}
             if proc.poll() is not None: raise ValueError('Runner stopped; inspect '+str(storage()/'runner.log'))
             time.sleep(.1)
         raise ValueError('Runner startup not confirmed; inspect runner.log')
@@ -276,7 +278,7 @@ def send(run,s,action,direction=0,atr=0,strategy='none',tickets=()):
     run['last_request']=ident
 
 def save_screen(run,s):
-    ev=evaluate(s['bars'],s['point']); run['selected']=ev['selected']; run['reason']=ev['reason']; run['screen_bar']=s['bars'][-1]['time']
+    ev=evaluate(s['bars'],s['point'],controls=s.get('trading_controls'));  run['selected']=ev['selected']; run['reason']=ev['reason']; run['screen_bar']=s['bars'][-1]['time']
     folder=storage()/'evaluations'/run['id']; folder.mkdir(parents=True,exist_ok=True)
     put(folder/(str(run['screen_bar'])+'.json'),ev)
     # Keep both failures and successes so failed experiments are not forgotten.
@@ -328,6 +330,9 @@ def run_loop(resume=False):
             learner.data['active_learning_regime']=run.get('learning_regime')
             learner.activate(s)
         elif not resume:learner.activate(s)
+        from ultimate_khorshid.tools.trading_controls import revision
+        run['worker_controls_revision']=revision(s['trading_controls'])
+        learner.controls=dict(s['trading_controls'])
         memory=TradeMemory(storage()/'trade_memory.sqlite')
         screen_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='demo-screen')
         screen_job=None
@@ -341,10 +346,15 @@ def run_loop(resume=False):
             print('Independent research observer unavailable: '+str(exc),flush=True)
         save_run(run); last_bar=None; bars_since_screen=24; stopping_since=None; failures=0
         allocation_retry_bar=None; allocation_retry_at=0.
+        atomic(files()/'khorshid_demo_lease.tsv',lease_text(s,run['id'],time.time()))
         try:
             while True:
                 try:
-                    s=snapshot(); same_account(run,s); ingest(run,s); failures=0
+                    s=snapshot(); same_account(run,s); ingest(run,s)
+                    from ultimate_khorshid.tools.trading_controls import revision
+                    if revision(s['trading_controls'])!=run['worker_controls_revision']:
+                        raise ValueError('Controls changed during run; stop and restart for a new learning scope')
+                    learner.controls=dict(s['trading_controls'])
                     memory.observe(s)
                     try:
                         memory.record_ack(s['login'],json.loads((files()/'khorshid_demo_ack.json').read_text()))
@@ -376,7 +386,7 @@ def run_loop(resume=False):
                         if time.monotonic()-stopping_since>15:
                             run['status']='stop_pending'; break
                     else:
-                        atomic(files()/'khorshid_demo_lease.tsv',lease_text(s,run['id'],time.time()))
+                        # Lease is renewed only after a complete successful cycle.
                         bar=s['bars'][-1]['time']
                         fast_handling=False
                         pending=run.get('profit_exit_pending')
@@ -444,6 +454,9 @@ def run_loop(resume=False):
                             except (OSError,ValueError): advice={}
                             plan=portfolio_gate(plan,s,advice,time.time())
                             plan=entry_profile(plan,s,advice.get('news_analysis',{}).get(s['symbol'],{}),time.time())
+                            if plan.get('action')=='open':
+                                plan['risk_fraction']*=selection.get('risk_multiplier',1.)
+                                plan['selection_stage']=selection.get('selection_stage','fixed')
                             plan=execution_gate(plan,ROOT,s,time.time(),advice=advice)
                             if plan.get('status')=='waiting_for_portfolio_allocation':
                                 allocation_retry_bar=bar;allocation_retry_at=time.monotonic()+2
@@ -509,6 +522,9 @@ def run_loop(resume=False):
                         elif run['status'] in ('market_closed_or_stale_quote','algo_disabled','managing_demo_position'):
                             run['status']='waiting_for_next_bar'; run['reason']='Waiting for next closed candle and a new entry signal'
                     save_run(run)
+                    failures=0
+                    if not stopping:
+                        atomic(files()/'khorshid_demo_lease.tsv',lease_text(s,run['id'],time.time()))
                 except SnapshotUnavailable as exc:
                     memory.archive.save('worker_error',run['id'],{'phase':'snapshot','error':str(exc)},
                         {'account':run['login'],'symbol':run['symbol'],'experiment_id':run.get('experiment_id')})
@@ -568,7 +584,7 @@ class MT5DemoTool(BaseTool):
     @property
     def spec(self):
         return ToolSpec(name=self.tool_id,category='mt5',timeout_seconds=25,
-            description='کنترل تمرین و معامله خودکار فقط حساب DEMO: start فقط برای استراتژی ثابتِ اعتبارسنجی و بازبینی‌شده است؛ پژوهش ده استراتژی مجوز معامله ایجاد نمی‌کند؛ stop توقف ورود و درخواست بستن فقط پوزیشن ربات و گزارش؛ report/status گزارش واقعی؛ catalog قواعد و منابع. اگر کاربر توقف خواست فوراً stop را اجرا کن. این نسخه ورود اکتشافی را مسدود می‌کند؛ بدون گزارش اعتبارسنجی مستقل و تأیید صریح، سفارش تازه نمی‌فرستد؛ تنظیم نسخهٔ جدید سقف هر ورود ۰٫۲۵٪ و مجموع حساب ۰٫۵٪ است؛ کیفیت قیمت و حد ضرر الزامی است. از mouse/shell برای دورزدن گاردهای معامله استفاده نکن. توقف قطعی پوزیشن را فقط با snapshot تازه و تعداد باز صفر اعلام کن. سود یا اجرای ابزار را جعل نکن.',
+            description='کنترل معامله فقط DEMO: start شروع صریح، stop توقف و درخواست بستن پوزیشن روبات، report/status گزارش. حالت adaptive_demo شامل آزمایش محدود استراتژی‌های کم‌نمونه و انتخاب بر اساس تجربه است؛ سود تضمین‌شده نیست. سقف‌های ریسک بومی و تخصیص پرتفوی برقرارند. توقف قطعی فقط با داده تازه و پوزیشن صفر.',
             parameters={'type':'object','properties':{'action':{'type':'string','enum':['start','stop','status','report','catalog']}},'required':['action']})
     def execute(self,**p):
         try:

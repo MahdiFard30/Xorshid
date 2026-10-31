@@ -90,7 +90,7 @@ def indicators(bars):
     return result,atr
 
 
-def simulate(bars,signals,atr,start,end,point,cost_multiplier=1.0,entry_allowed=None,entry_profiles=None,stop_atr=STOP_ATR):
+def simulate(bars,signals,atr,start,end,point,cost_multiplier=1.0,entry_allowed=None,entry_profiles=None,stop_atr=STOP_ATR,controls=None):
     """Current live exit policy with conservative OHLC ordering and proxy costs.
 
     Historical news profiles are quick unless supplied with pre-entry timestamps.
@@ -102,9 +102,9 @@ def simulate(bars,signals,atr,start,end,point,cost_multiplier=1.0,entry_allowed=
         profile=(entry_profiles or {}).get(bars[i-1]['time'])
         step(book,bar,signals[i-1],atr[i-1],point,
              entry_ok=entry_allowed is None or bool(entry_allowed[i-1]),
-             cost_multiplier=cost_multiplier,profile=profile,stop_atr=stop_atr)
+             cost_multiplier=cost_multiplier,profile=profile,stop_atr=stop_atr,controls=controls)
     if book['position'] is not None:
-        step(book,bars[end-1],0,0,point,cost_multiplier=cost_multiplier,allow_entry=False,force_close=True,stop_atr=stop_atr)
+        step(book,bars[end-1],0,0,point,cost_multiplier=cost_multiplier,allow_entry=False,force_close=True,stop_atr=stop_atr,controls=controls)
     return metrics(book)
 
 
@@ -112,14 +112,14 @@ def qualifies(m):
     return m['trades']>=5 and m['return_pct']>0 and m['profit_factor']>=1.1 and m['drawdown_pct']<=10
 
 
-def evaluate(bars,point):
+def evaluate(bars,point,controls=None):
     if len(bars)<1000: raise ValueError(f'Need 1000 closed candles, have {len(bars)}; load chart history in MT5.')
     if not math.isfinite(point) or point<=0: raise ValueError('Invalid point size')
     signals,atr=indicators(bars); n=len(bars); a=int(n*.6); b=int(n*.8)
     rows={}
     for name,title,url in CATALOG:
-        train=simulate(bars,signals[name],atr,61,a,point)
-        valid=simulate(bars,signals[name],atr,a,b,point)
+        train=simulate(bars,signals[name],atr,61,a,point,controls=controls)
+        valid=simulate(bars,signals[name],atr,a,b,point,controls=controls)
         rows[name]={'name':title,'source':url,'train':train,'validation':valid}
     shortlist=sorted(rows,key=lambda k:rows[k]['train']['return_pct']-rows[k]['train']['drawdown_pct'],reverse=True)[:3]
     eligible=[k for k in shortlist if qualifies(rows[k]['validation']) and rows[k]['train']['return_pct']>0]
@@ -127,11 +127,11 @@ def evaluate(bars,point):
     selected=None
     # All ten results retained for research; choice is fixed before any holdout is inspected.
     for name in rows:
-        rows[name]['holdout']=simulate(bars,signals[name],atr,b,n,point)
-        rows[name]['stress']=simulate(bars,signals[name],atr,b,n,point,1.5)
+        rows[name]['holdout']=simulate(bars,signals[name],atr,b,n,point,controls=controls)
+        rows[name]['stress']=simulate(bars,signals[name],atr,b,n,point,1.5,controls=controls)
         rows[name]['profitable_holdout']=qualifies(rows[name]['holdout'])
     if candidate and qualifies(rows[candidate]['holdout']) and qualifies(rows[candidate]['stress']): selected=candidate
-    return {'version':VERSION,'selected':selected,'candidate_before_holdout':candidate,'results':rows,'rules':RULES,
+    return {'version':VERSION,'selected':selected,'candidate_before_holdout':candidate,'results':rows,'rules':RULES,'effective_controls':dict(controls or {}),
             'bars':n,'split_indices':[a,b],'first_bar':bars[0]['time'],'last_bar':bars[-1]['time'],
             'historical_news':'Unknown news uses quick profile; staged needs pre-entry timestamped evidence','data_sha256':hashlib.sha256(json.dumps(bars,sort_keys=True).encode()).hexdigest(),
             'costs':'Bid candles; historical spread (floor 2 points), 2 points slippage per side, 0.10R commission and 0.02R/day swap proxies; stress x1.5. Approximate, not broker-exact.',

@@ -1,7 +1,8 @@
 """Observe existing demo workers without restarting them or touching orders.
 
-Own lock/status/research files are the only writes. Broker files and execution
-journals are opened read-only. Run via scripts/research_trader.py.
+Broker files are read-only. While a worker owns its journal, research only
+reads it. Stopped-worker history is reconciled under its ownership locks.
+Run via scripts/research_trader.py.
 """
 import argparse
 import fcntl
@@ -17,7 +18,6 @@ import time
 
 from ultimate_khorshid.tools.demo_learning import atomic
 from ultimate_khorshid.tools.market_learning import ContextModel, describe
-from ultimate_khorshid.tools.strategy_research import StrategyLab, ForwardTrial
 from ultimate_khorshid.tools.trade_memory import TradeMemory
 from ultimate_khorshid.tools.demo_learning import Experience,NAMES
 from ultimate_khorshid.tools.demo_lab import indicators
@@ -46,6 +46,39 @@ def ensure_started(root=ROOT):
     return {'status':'starting','pid':process.pid}
 
 
+def reconcile_stopped(root, symbol, snapshot, state):
+    """Import late fills and learn once, never launch a worker or send an order."""
+    if state.get('status') not in ('stopped','stop_pending') or not state.get('ended_utc'):
+        return None
+    if (snapshot.get('demo') is not True or snapshot.get('symbol')!=symbol
+            or snapshot.get('login')!=state.get('login') or snapshot.get('period')!=state.get('period')):
+        raise ValueError('Stopped reconciliation scope mismatch')
+    directory=root/'.khorshid-multi'/symbol
+    with (directory/'start.lock').open('a') as start, (directory/'runner.lock').open('a') as owner:
+        try:
+            fcntl.flock(start,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            fcntl.flock(owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            return None
+        scope=f"{snapshot['login']}:{symbol}:{snapshot['period']}"
+        path=directory/'experience'/(hashlib.sha256(scope.encode()).hexdigest()[:20]+'.json')
+        if not path.is_file():return None
+        learner=Experience(path)
+        if learner.data.get('account')!=snapshot['login']:raise ValueError('Reconciliation account mismatch')
+        learner.set_regime(state.get('learning_regime'))
+        memory=TradeMemory(directory/'trade_memory.sqlite')
+        memory.observe(snapshot)
+        groups=memory.outcomes(snapshot)
+        before=len(learner.data.get('verified_seen',[]))
+        learner.learn_live(groups,None,{str(p['identifier']) for p in snapshot['positions']})
+        result={'updated_utc':time.time(),'learned_results':len(learner.data.get('verified_seen',[]))-before,
+                'run_id':state['id'],'orders_sent':False}
+        if result['learned_results']:
+            memory.archive.save('stopped_reconciliation',state['id'],result,
+                                {'account':snapshot['login'],'symbol':symbol})
+        return result
+
+
 def observe_symbol(root, terminal, symbol, now=None):
     now=time.time() if now is None else now
     path=terminal/'MQL5/Files/khorshid_multi'/symbol/'khorshid_demo_snapshot.json'
@@ -59,6 +92,7 @@ def observe_symbol(root, terminal, symbol, now=None):
     state=json.loads(state_path.read_text())
     if state['login']!=snapshot['login'] or state['period']!=snapshot['period']:
         raise ValueError('Worker/snapshot account or timeframe mismatch')
+    reconciliation=reconcile_stopped(root,symbol,snapshot,state)
     # Derive paths from known root and scope, never a path supplied by terminal data.
     scope=f"{snapshot['login']}:{symbol}:{snapshot['period']}"
     key=hashlib.sha256(scope.encode()).hexdigest()[:20]
@@ -75,6 +109,7 @@ def observe_symbol(root, terminal, symbol, now=None):
     imported=model.observe(groups,{str(p['identifier']) for p in snapshot['positions']})
     directory=root/'.khorshid-research'/symbol/key/f'policy-{POLICY_VERSION}'
     directory.mkdir(parents=True,exist_ok=True)
+    from ultimate_khorshid.tools.strategy_research import StrategyLab, ForwardTrial
     lab=StrategyLab(directory/'lab')
     trial_paths=sorted(directory.glob('forward-*.json'))
     trials=[]
@@ -93,6 +128,7 @@ def observe_symbol(root, terminal, symbol, now=None):
             trial=ForwardTrial(directory/('forward-'+latest['experiment_id']+'.json'))
             trials.append(trial.observe(snapshot,latest,now))
     out={'symbol':symbol,'scope':scope,'updated_utc':now,'broker_writes':False,
+         'stopped_reconciliation':reconciliation,
          'execution_uses_context':bool(state.get('entry_decision',{}).get('market_context')),
          'new_context_results':imported,'context_learning':ContextModel.summary(context_path,snapshot['login']),
          'market_context':describe(snapshot['bars'],snapshot['generated_utc'],snapshot['ask']-snapshot['bid']),
@@ -159,6 +195,19 @@ def observe_portfolio(root,terminal,now=None):
     return advice
 
 
+def allocation_loop(root,terminal,stopped):
+    output=root/'.khorshid-research';output.mkdir(exist_ok=True)
+    while not stopped.is_set():
+        try:
+            portfolio=observe_portfolio(root,terminal)
+        except Exception as exc:
+            portfolio={'version':1,'updated_utc':time.time(),'expires_utc':time.time(),
+                'status':'allocation_unavailable','execution_ready':False,'symbols':{},
+                'reason':type(exc).__name__+': '+str(exc)}
+        atomic(output/'portfolio.json',portfolio)
+        stopped.wait(2)
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--once',action='store_true')
@@ -197,6 +246,10 @@ def main(argv=None):
             print('Research observer is already running.')
             return 1
         threading.Thread(target=headline_loop,args=(ROOT,stopped),daemon=True).start()
+        allocator=None
+        if not args.once:
+            allocator=threading.Thread(target=allocation_loop,args=(ROOT,terminal,stopped),daemon=True)
+            allocator.start()
         while not stopped.is_set():
             results={}
             for symbol in SYMBOLS:
@@ -208,12 +261,12 @@ def main(argv=None):
                     # Research failure must never stop the existing trading workers.
                     results[symbol]={'status':'research_error','error':type(exc).__name__+': '+str(exc),'broker_writes':False}
             try:
-                portfolio=observe_portfolio(ROOT,terminal)
+                portfolio=observe_portfolio(ROOT,terminal) if args.once else read_json(output/'portfolio.json')
             except Exception as exc:
                 portfolio={'version':1,'updated_utc':time.time(),'expires_utc':time.time(),
                     'status':'allocation_unavailable','execution_ready':False,'symbols':{},
                     'reason':type(exc).__name__+': '+str(exc)}
-            atomic(output/'portfolio.json',portfolio)
+            if args.once:atomic(output/'portfolio.json',portfolio)
             for symbol,result in results.items():
                 result['portfolio_advice']=portfolio.get('symbols',{}).get(symbol,{})
                 result['portfolio_status']=portfolio['status']
